@@ -2,6 +2,9 @@ using Microsoft.Extensions.Options;
 
 namespace SquirrelBox;
 
+/// <summary>
+/// Default implementation of <see cref="IInboxService"/>.
+/// </summary>
 public sealed class DefaultInbox : IInboxService
 {
     private readonly IInboxContextAccessor _contextAccessor;
@@ -13,6 +16,9 @@ public sealed class DefaultInbox : IInboxService
     private InboxContext _current;
     private InboxContext _lastContext;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DefaultInbox"/> class.
+    /// </summary>
     public DefaultInbox(
         IOptions<SquirrelBoxOptions> options,
         IInboxContextAccessor contextAccessor,
@@ -29,10 +35,13 @@ public sealed class DefaultInbox : IInboxService
         _transactionRunner = transactionRunner ?? throw new ArgumentNullException(nameof(transactionRunner));
     }
 
+    /// <inheritdoc />
     public InboxContext Current => _current ?? _contextAccessor.Current;
 
+    /// <inheritdoc />
     public InboxContext LastContext => _lastContext;
 
+    /// <inheritdoc />
     public async ValueTask<InboxOpenResult> OpenOrContinueAsync(InboxOpenRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -97,6 +106,7 @@ public sealed class DefaultInbox : IInboxService
         return result;
     }
 
+    /// <inheritdoc />
     public async ValueTask<InboxPayloadVerificationResult> VerifyCurrentPayloadAsync(
         object payload,
         CancellationToken cancellationToken = default)
@@ -112,6 +122,7 @@ public sealed class DefaultInbox : IInboxService
             cancellationToken);
     }
 
+    /// <inheritdoc />
     public async ValueTask CompleteCurrentAsync(
         InboxCompletion completion = null,
         CancellationToken cancellationToken = default)
@@ -129,12 +140,14 @@ public sealed class DefaultInbox : IInboxService
         RestorePreviousContext(context);
     }
 
+    /// <inheritdoc />
     public ValueTask FailCurrentAsync(Exception exception, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(exception);
         return FailCurrentAsync(InboxFailure.FromException(exception), cancellationToken);
     }
 
+    /// <inheritdoc />
     public async ValueTask FailCurrentAsync(InboxFailure failure, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(failure);
@@ -147,6 +160,7 @@ public sealed class DefaultInbox : IInboxService
         RestorePreviousContext(context);
     }
 
+    /// <inheritdoc />
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => _transactionRunner.RunAsync(token => _store.GetAsync(entryId, token), cancellationToken);
 
