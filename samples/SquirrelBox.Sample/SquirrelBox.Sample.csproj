@@ -10,8 +10,10 @@
 
   <ItemGroup>
     <PackageReference Include="Mule.DurableActions.InMemory" Version="1.4.1" />
+    <PackageReference Include="Pigeon.Messaging.InMemory" Version="3.1.0" />
     <ProjectReference Include="..\..\src\SquirrelBox.AspNetCore\SquirrelBox.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.InMemory\SquirrelBox.InMemory.csproj" />
+    <ProjectReference Include="..\..\src\SquirrelBox.Messaging.Pigeon\SquirrelBox.Messaging.Pigeon.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.Mule\SquirrelBox.Mule.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox\SquirrelBox.csproj" />
   </ItemGroup>
