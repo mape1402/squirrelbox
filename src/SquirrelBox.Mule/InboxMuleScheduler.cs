@@ -32,8 +32,10 @@ public sealed class InboxMuleScheduler : IInboxMuleScheduler
 
         return _mule.EnqueueAsync(key, payload, options =>
         {
-            options.Metadata["squirrelbox-inbox-id"] = context.Entry.Id.ToString();
-            options.Metadata["idempotency-key"] = context.EffectiveIdempotencyKey;
+            options.CorrelationId ??= context.Entry.CorrelationId;
+            options.DeduplicationKey ??= context.Entry.Id.ToString();
+            options.Metadata[SquirrelBoxMuleMetadata.InboxEntryId] = context.Entry.Id.ToString();
+            options.Metadata[SquirrelBoxMuleMetadata.IdempotencyKey] = context.EffectiveIdempotencyKey;
             configure?.Invoke(options);
         }, cancellationToken);
     }

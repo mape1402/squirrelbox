@@ -24,6 +24,20 @@ public interface IInboxService
     ValueTask<InboxOpenResult> OpenOrContinueAsync(InboxOpenRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Continues a persisted inbox entry by id and makes it the current ambient context.
+    /// </summary>
+    /// <param name="entryId">The ULID that identifies the inbox entry to continue.</param>
+    /// <param name="owner">The component that owns the continued context.</param>
+    /// <param name="ownsCompletion">Whether the continued context should complete or fail the entry.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The continued inbox context.</returns>
+    ValueTask<InboxContext> ContinueAsync(
+        Ulid entryId,
+        string owner = null,
+        bool ownsCompletion = true,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Verifies the current inbox entry against a payload hash, attaching the hash when the entry was opened without one.
     /// </summary>
     /// <param name="payload">The payload to verify.</param>
