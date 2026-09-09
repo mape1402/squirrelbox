@@ -5,15 +5,15 @@ namespace SquirrelBox.InMemory.Tests;
 public sealed class InMemoryInboxStoreTests
 {
     [Fact]
-    public async Task TryBeginAsync_keys_entries_by_source_operation_and_idempotency_key()
+    public async Task TryOpenAsync_keys_entries_by_source_operation_and_idempotency_key()
     {
         var store = new InMemoryInboxStore();
 
-        var first = await store.TryBeginAsync(Create("POST /orders"));
-        var otherOperation = await store.TryBeginAsync(Create("POST /payments"));
+        var first = await store.TryOpenAsync(Create("POST /orders"));
+        var otherOperation = await store.TryOpenAsync(Create("POST /payments"));
 
-        Assert.Equal(InboxBeginState.Started, first.State);
-        Assert.Equal(InboxBeginState.Started, otherOperation.State);
+        Assert.Equal(InboxOpenState.Opened, first.State);
+        Assert.Equal(InboxOpenState.Opened, otherOperation.State);
         Assert.NotEqual(first.Entry.Id, otherOperation.Entry.Id);
     }
 
@@ -23,16 +23,17 @@ public sealed class InMemoryInboxStoreTests
         var store = new InMemoryInboxStore();
 
         await Assert.ThrowsAsync<InboxEntryNotFoundException>(() =>
-            store.MarkCompletedAsync(Guid.NewGuid(), InboxCompletion.Empty, DateTimeOffset.UtcNow).AsTask());
+            store.MarkCompletedAsync(Ulid.NewUlid(), InboxCompletion.Empty, DateTimeOffset.UtcNow).AsTask());
     }
 
     private static InboxEntry Create(string operation)
         => new()
         {
-            Id = Guid.NewGuid(),
+            Id = Ulid.NewUlid(),
             Source = "http",
             Operation = operation,
             IdempotencyKey = "same-key",
+            IdempotencyKeySource = InboxIdempotencyKeySource.Explicit,
             PayloadHash = "abc",
             PayloadType = typeof(object).AssemblyQualifiedName,
             Status = InboxStatus.Started,

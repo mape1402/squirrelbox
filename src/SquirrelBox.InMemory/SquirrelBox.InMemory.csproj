@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Ulid" Version="1.4.1" />
     <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
   </ItemGroup>
 

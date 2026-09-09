@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ### Added
 
 - Initial SquirrelBox solution skeleton.
-- Added the core inbox/idempotency package.
-- Added in-memory, Entity Framework Core, ASP.NET Core, Pigeon, and TurtlePath package shells.
-- Added core inbox identity, payload conflict detection, completion snapshots, failure details, expiration, and execution mode modeling.
+- Added the core inbox/idempotency package with `IInboxService`.
+- Added in-memory, Entity Framework Core, ASP.NET Core, Messaging, and TurtlePath package shells.
+- Added ULID-based inbox entry identity.
+- Added ambient inbox context support for open-or-continue flows.
+- Added effective idempotency keys with explicit and computed-from-payload sources.
+- Added payload conflict detection, payload verification, completion snapshots, failure details, expiration, and execution mode modeling.
+- Renamed the messaging shell from `SquirrelBox.Pigeon` to `SquirrelBox.Messaging`.

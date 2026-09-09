@@ -2,11 +2,11 @@ namespace SquirrelBox;
 
 public sealed class InboxEntryNotFoundException : InvalidOperationException
 {
-    public InboxEntryNotFoundException(Guid entryId)
+    public InboxEntryNotFoundException(Ulid entryId)
         : base($"Inbox entry '{entryId}' was not found.")
     {
         EntryId = entryId;
     }
 
-    public Guid EntryId { get; }
+    public Ulid EntryId { get; }
 }

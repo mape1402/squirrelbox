@@ -17,8 +17,9 @@ public static class SquirrelBoxServiceCollectionExtensions
             services.AddOptions<SquirrelBoxOptions>();
 
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IInboxContextAccessor, AsyncLocalInboxContextAccessor>();
         services.AddSingleton<IInboxPayloadHasher, JsonInboxPayloadHasher>();
-        services.AddScoped<IInbox, DefaultInbox>();
+        services.AddScoped<IInboxService, DefaultInbox>();
 
         return services;
     }

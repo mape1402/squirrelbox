@@ -5,9 +5,9 @@ namespace SquirrelBox.InMemory;
 public sealed class InMemoryInboxStore : IInboxStore
 {
     private readonly ConcurrentDictionary<string, InboxEntry> _entriesByKey = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<Guid, InboxEntry> _entriesById = new();
+    private readonly ConcurrentDictionary<Ulid, InboxEntry> _entriesById = new();
 
-    public ValueTask<InboxBeginResult> TryBeginAsync(InboxEntry entry, CancellationToken cancellationToken = default)
+    public ValueTask<InboxOpenResult> TryOpenAsync(InboxEntry entry, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -19,23 +19,51 @@ public sealed class InMemoryInboxStore : IInboxStore
         });
 
         if (ReferenceEquals(stored, entry))
-            return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.Started, stored));
+            return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Opened, entry: stored));
 
         if (stored.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= entry.CreatedOnUtc)
         {
             stored.Status = InboxStatus.Expired;
             stored.UpdatedOnUtc = entry.CreatedOnUtc;
-            return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.Expired, stored));
+            return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Expired, entry: stored));
         }
 
-        if (!string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
-            return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.PayloadConflict, stored));
+        if (!string.IsNullOrWhiteSpace(stored.PayloadHash) &&
+            !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
+            !string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
+        {
+            return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.PayloadConflict, entry: stored));
+        }
 
-        return ValueTask.FromResult(new InboxBeginResult(MapDuplicateState(stored), stored));
+        if (string.IsNullOrWhiteSpace(stored.PayloadHash) && !string.IsNullOrWhiteSpace(entry.PayloadHash))
+            stored.PayloadHash = entry.PayloadHash;
+
+        return ValueTask.FromResult(new InboxOpenResult(MapDuplicateState(stored), entry: stored));
+    }
+
+    public ValueTask<InboxPayloadVerificationResult> AttachPayloadHashAsync(
+        Ulid entryId,
+        string payloadHash,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payloadHash);
+
+        var entry = GetExisting(entryId);
+
+        if (string.IsNullOrWhiteSpace(entry.PayloadHash))
+        {
+            entry.PayloadHash = payloadHash;
+            return ValueTask.FromResult(new InboxPayloadVerificationResult(InboxPayloadVerificationState.Attached, entry));
+        }
+
+        if (!string.Equals(entry.PayloadHash, payloadHash, StringComparison.Ordinal))
+            return ValueTask.FromResult(new InboxPayloadVerificationResult(InboxPayloadVerificationState.PayloadConflict, entry));
+
+        return ValueTask.FromResult(new InboxPayloadVerificationResult(InboxPayloadVerificationState.Verified, entry));
     }
 
     public ValueTask MarkCompletedAsync(
-        Guid entryId,
+        Ulid entryId,
         InboxCompletion completion,
         DateTimeOffset completedOnUtc,
         CancellationToken cancellationToken = default)
@@ -51,7 +79,7 @@ public sealed class InMemoryInboxStore : IInboxStore
     }
 
     public ValueTask MarkFailedAsync(
-        Guid entryId,
+        Ulid entryId,
         InboxFailure failure,
         DateTimeOffset failedOnUtc,
         CancellationToken cancellationToken = default)
@@ -66,22 +94,22 @@ public sealed class InMemoryInboxStore : IInboxStore
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask<InboxEntry> GetAsync(Guid entryId, CancellationToken cancellationToken = default)
+    public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => ValueTask.FromResult(GetExisting(entryId));
 
     private static string BuildKey(InboxEntry entry)
         => string.Join(":", entry.Source, entry.Operation, entry.IdempotencyKey);
 
-    private static InboxBeginState MapDuplicateState(InboxEntry entry)
+    private static InboxOpenState MapDuplicateState(InboxEntry entry)
         => entry.Status switch
         {
-            InboxStatus.Completed => InboxBeginState.DuplicateCompleted,
-            InboxStatus.Failed => InboxBeginState.DuplicateFailed,
-            InboxStatus.Expired => InboxBeginState.Expired,
-            _ => InboxBeginState.DuplicateInProgress
+            InboxStatus.Completed => InboxOpenState.DuplicateCompleted,
+            InboxStatus.Failed => InboxOpenState.DuplicateFailed,
+            InboxStatus.Expired => InboxOpenState.Expired,
+            _ => InboxOpenState.DuplicateInProgress
         };
 
-    private InboxEntry GetExisting(Guid entryId)
+    private InboxEntry GetExisting(Ulid entryId)
         => _entriesById.TryGetValue(entryId, out var entry)
             ? entry
             : throw new InboxEntryNotFoundException(entryId);
