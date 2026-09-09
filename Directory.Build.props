@@ -50,8 +50,8 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.18" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.18" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="8.0.18" />
-    <PackageVersion Include="Pigeon.Messaging" Version="2.8.0" />
-    <PackageVersion Include="Pigeon.Messaging.InMemory" Version="2.8.0" />
+    <PackageVersion Include="Pigeon.Messaging" Version="3.1.0" />
+    <PackageVersion Include="Pigeon.Messaging.InMemory" Version="3.1.0" />
     <PackageVersion Include="Mule.DurableActions" Version="1.4.1" />
     <PackageVersion Include="Mule.DurableActions.InMemory" Version="1.4.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />

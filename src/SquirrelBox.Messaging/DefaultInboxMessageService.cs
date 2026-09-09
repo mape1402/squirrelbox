@@ -44,6 +44,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             PayloadType = context.Payload?.GetType().AssemblyQualifiedName,
             CorrelationId = context.CorrelationId,
             Owner = "messaging",
+            ExecutionMode = context.ExecutionMode ?? _options.ExecutionModeResolver?.Invoke(context),
             AllowPayloadHashAsIdempotencyKey = _options.AllowPayloadHashAsIdempotencyKey,
             Metadata = new Dictionary<string, string>(context.Metadata, StringComparer.OrdinalIgnoreCase)
         };

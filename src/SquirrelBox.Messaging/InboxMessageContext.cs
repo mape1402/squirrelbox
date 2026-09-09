@@ -41,6 +41,11 @@ public sealed class InboxMessageContext
     public string CorrelationId { get; init; }
 
     /// <summary>
+    /// Gets or sets the execution mode requested by the transport adapter.
+    /// </summary>
+    public InboxExecutionMode? ExecutionMode { get; init; }
+
+    /// <summary>
     /// Gets or sets the deserialized payload.
     /// </summary>
     public object Payload { get; init; }

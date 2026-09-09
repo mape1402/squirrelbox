@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pigeon.Messaging.Consuming.Dispatching;
 using SquirrelBox.Messaging;
+using SquirrelBox.Mule;
 
 namespace SquirrelBox.Messaging.Pigeon;
 
@@ -11,7 +12,7 @@ namespace SquirrelBox.Messaging.Pigeon;
 public static class SquirrelBoxPigeonServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds SquirrelBox to the Pigeon consume interceptor pipeline.
+    /// Adds SquirrelBox to the Pigeon consume decision and execution pipelines.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Optional Pigeon adapter configuration.</param>
@@ -23,13 +24,15 @@ public static class SquirrelBoxPigeonServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddSquirrelBoxMessaging();
+        services.AddSquirrelBoxMule();
 
         if (configure is null)
             services.AddOptions<SquirrelBoxPigeonOptions>();
         else
             services.Configure(configure);
 
-        services.TryAddEnumerable(ServiceDescriptor.Scoped<IConsumeInterceptor, SquirrelBoxPigeonConsumeInterceptor>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IConsumeDecisionInterceptor, SquirrelBoxPigeonDecisionInterceptor>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IConsumeExecutionInterceptor, SquirrelBoxPigeonExecutionInterceptor>());
         return services;
     }
 }

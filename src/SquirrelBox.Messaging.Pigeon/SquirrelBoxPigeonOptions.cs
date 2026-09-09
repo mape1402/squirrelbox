@@ -1,4 +1,5 @@
 using Pigeon.Messaging.Consuming.Dispatching;
+using Pigeon.Messaging.Contracts;
 
 namespace SquirrelBox.Messaging.Pigeon;
 
@@ -21,4 +22,24 @@ public sealed class SquirrelBoxPigeonOptions
     /// Gets or sets an optional operation resolver for Pigeon consume contexts.
     /// </summary>
     public Func<ConsumeContext, string> OperationResolver { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional message contract version resolver for Pigeon consume contexts.
+    /// </summary>
+    public Func<ConsumeContext, SemanticVersion?> VersionResolver { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional execution mode resolver for Pigeon consume contexts.
+    /// </summary>
+    public Func<ConsumeContext, InboxExecutionMode?> ExecutionModeResolver { get; set; }
+
+    /// <summary>
+    /// Gets or sets the decision returned when a matching inbox entry is already in progress.
+    /// </summary>
+    public PigeonConsumeDecision InProgressDecision { get; set; } = PigeonConsumeDecision.AckAndSkip;
+
+    /// <summary>
+    /// Gets or sets the decision returned when SquirrelBox rejects a consumed message.
+    /// </summary>
+    public PigeonConsumeDecision RejectedDecision { get; set; } = PigeonConsumeDecision.Reject;
 }
