@@ -131,6 +131,34 @@ public sealed class InboxMuleSchedulerTests
         Assert.Equal("order-hosted", probe.Values.Single());
     }
 
+    [Fact]
+    public async Task Hosted_mule_worker_executes_deferred_declared_operation_end_to_end()
+    {
+        using var host = CreateOperationHost();
+        await host.StartAsync();
+
+        Ulid entryId;
+        using (var scope = host.Services.CreateScope())
+        {
+            var result = await scope.ServiceProvider
+                .GetRequiredService<ISquirrelBoxOperationService>()
+                .ExecuteAsync<CreateDeferredOrderOperation, DeferredOrderRequest, DeferredOrderResult>(
+                    new DeferredOrderRequest("order-operation"),
+                    CancellationToken.None);
+
+            entryId = result.Context.Entry.Id;
+            Assert.True(result.Deferred);
+            Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
+        }
+
+        var probe = host.Services.GetRequiredService<DeferredProbe>();
+        await probe.WaitAsync();
+        await WaitForInboxStatusAsync(host.Services, entryId, InboxStatus.Completed);
+        await host.StopAsync();
+
+        Assert.Equal("order-operation", probe.Values.Single());
+    }
+
     private static ServiceProvider CreateServiceProvider()
     {
         var services = new ServiceCollection();
@@ -157,6 +185,27 @@ public sealed class InboxMuleSchedulerTests
                 services.AddMule(mule => mule
                     .UseInMemory()
                     .AddActionsFromAssemblyContaining<CaptureDeferredPayloadAction>());
+            })
+            .Build();
+
+    private static IHost CreateOperationHost()
+        => Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                services.Configure<MuleSettings>(settings =>
+                {
+                    settings.DispatchInterval = TimeSpan.FromMilliseconds(50);
+                    settings.RetryDelay = TimeSpan.FromMilliseconds(50);
+                    settings.MaxAttempts = 1;
+                });
+
+                services.AddSingleton<DeferredProbe>();
+                services.AddScoped<CreateDeferredOrderOperation>();
+                services.AddSquirrelBox(options => options.DefaultExecutionMode = InboxExecutionMode.Deferred).UseInMemory();
+                services.AddSquirrelBoxMule();
+                services.AddMule(mule => mule
+                    .UseInMemory()
+                    .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>());
             })
             .Build();
 
@@ -308,4 +357,22 @@ public sealed class InboxMuleSchedulerTests
     }
 
     private sealed record DeferredPayload(string Id);
+
+    private sealed record DeferredOrderRequest(string Id);
+
+    private sealed record DeferredOrderResult(string Id);
+
+    private sealed class CreateDeferredOrderOperation : SquirrelBoxOperation<DeferredOrderRequest, DeferredOrderResult>
+    {
+        protected override ValueTask<DeferredOrderResult> ExecuteAsync(
+            DeferredOrderRequest request,
+            SquirrelBoxOperationContext context,
+            CancellationToken cancellationToken)
+        {
+            context.Services.GetRequiredService<DeferredProbe>()
+                .Record(request.Id, context.InboxContext.Entry.Id, context.InboxContext.Owner);
+
+            return ValueTask.FromResult(new DeferredOrderResult(request.Id));
+        }
+    }
 }
