@@ -5,13 +5,14 @@
     <PackageId>SquirrelBox.Messaging.Pigeon</PackageId>
     <Title>SquirrelBox Pigeon Messaging Adapter</Title>
     <PackageType>Dependency</PackageType>
-    <Description>Pigeon consume interceptor adapter for SquirrelBox messaging idempotency.</Description>
+    <Description>Pigeon consume decision, execution, and deferred replay adapter for SquirrelBox messaging idempotency.</Description>
     <PackageTags>$(PackageTags);messaging;pigeon;interceptor</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Pigeon.Messaging" Version="2.8.0" />
+    <PackageReference Include="Pigeon.Messaging" Version="3.1.0" />
     <ProjectReference Include="..\SquirrelBox.Messaging\SquirrelBox.Messaging.csproj" />
+    <ProjectReference Include="..\SquirrelBox.Mule\SquirrelBox.Mule.csproj" />
     <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
   </ItemGroup>
 

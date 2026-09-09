@@ -41,4 +41,9 @@ public sealed class SquirrelBoxMessagingOptions
         var operation = string.IsNullOrWhiteSpace(context.Operation) ? "message" : context.Operation;
         return $"{topic}:{version}/{subscription}/{operation}";
     };
+
+    /// <summary>
+    /// Gets or sets an optional execution mode resolver for incoming messages.
+    /// </summary>
+    public Func<InboxMessageContext, InboxExecutionMode?> ExecutionModeResolver { get; set; }
 }
