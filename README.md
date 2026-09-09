@@ -15,6 +15,21 @@ dotnet add package SquirrelBox.Pigeon
 dotnet add package TurtlePath.SquirrelBox
 ```
 
+## Core Scope
+
+The core package is transport-neutral. It owns:
+
+- inbox identity with `Source + Operation + IdempotencyKey`
+- payload hashing for conflict detection
+- entry lifecycle with `Started`, `Completed`, `Failed`, and `Expired`
+- begin results for duplicates, conflicts, and expired entries
+- optional completion snapshots for replay-capable adapters
+- failure details for diagnostics
+- inline execution by default, with deferred execution modeled as an explicit opt-in mode
+- storage contracts implemented by provider packages
+
+The core does not know about HTTP status codes, broker acknowledgements, Spider pipelines, or background execution.
+
 ## Intended Shape
 
 - `SquirrelBox`: core abstractions, lifecycle, payload hashing, and idempotency service.
@@ -50,7 +65,7 @@ if (!result.Accepted)
 try
 {
     await handler.Handle(createOrderRequest, cancellationToken);
-    await inbox.CompleteAsync(result.Entry.Id, cancellationToken);
+    await inbox.CompleteAsync(result.Entry.Id, cancellationToken: cancellationToken);
 }
 catch (Exception ex)
 {

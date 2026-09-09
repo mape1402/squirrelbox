@@ -5,5 +5,7 @@ public enum InboxBeginState
     Started,
     DuplicateInProgress,
     DuplicateCompleted,
-    DuplicateFailed
+    DuplicateFailed,
+    PayloadConflict,
+    Expired
 }

@@ -29,4 +29,10 @@ public sealed class InboxEntry
     public DateTimeOffset? ExpiresOnUtc { get; set; }
 
     public string Failure { get; set; }
+
+    public InboxCompletion Completion { get; set; }
+
+    public InboxFailure FailureDetails { get; set; }
+
+    public Dictionary<string, string> Metadata { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

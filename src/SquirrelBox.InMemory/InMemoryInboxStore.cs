@@ -21,32 +21,53 @@ public sealed class InMemoryInboxStore : IInboxStore
         if (ReferenceEquals(stored, entry))
             return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.Started, stored));
 
+        if (stored.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= entry.CreatedOnUtc)
+        {
+            stored.Status = InboxStatus.Expired;
+            stored.UpdatedOnUtc = entry.CreatedOnUtc;
+            return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.Expired, stored));
+        }
+
+        if (!string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
+            return ValueTask.FromResult(new InboxBeginResult(InboxBeginState.PayloadConflict, stored));
+
         return ValueTask.FromResult(new InboxBeginResult(MapDuplicateState(stored), stored));
     }
 
-    public ValueTask MarkCompletedAsync(Guid entryId, DateTimeOffset completedOnUtc, CancellationToken cancellationToken = default)
+    public ValueTask MarkCompletedAsync(
+        Guid entryId,
+        InboxCompletion completion,
+        DateTimeOffset completedOnUtc,
+        CancellationToken cancellationToken = default)
     {
-        if (_entriesById.TryGetValue(entryId, out var entry))
-        {
-            entry.Status = InboxStatus.Completed;
-            entry.CompletedOnUtc = completedOnUtc;
-            entry.UpdatedOnUtc = completedOnUtc;
-        }
+        var entry = GetExisting(entryId);
+
+        entry.Status = InboxStatus.Completed;
+        entry.Completion = completion;
+        entry.CompletedOnUtc = completedOnUtc;
+        entry.UpdatedOnUtc = completedOnUtc;
 
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask MarkFailedAsync(Guid entryId, string failure, DateTimeOffset failedOnUtc, CancellationToken cancellationToken = default)
+    public ValueTask MarkFailedAsync(
+        Guid entryId,
+        InboxFailure failure,
+        DateTimeOffset failedOnUtc,
+        CancellationToken cancellationToken = default)
     {
-        if (_entriesById.TryGetValue(entryId, out var entry))
-        {
-            entry.Status = InboxStatus.Failed;
-            entry.Failure = failure;
-            entry.UpdatedOnUtc = failedOnUtc;
-        }
+        var entry = GetExisting(entryId);
+
+        entry.Status = InboxStatus.Failed;
+        entry.Failure = failure?.Details;
+        entry.FailureDetails = failure;
+        entry.UpdatedOnUtc = failedOnUtc;
 
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask<InboxEntry> GetAsync(Guid entryId, CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(GetExisting(entryId));
 
     private static string BuildKey(InboxEntry entry)
         => string.Join(":", entry.Source, entry.Operation, entry.IdempotencyKey);
@@ -56,6 +77,12 @@ public sealed class InMemoryInboxStore : IInboxStore
         {
             InboxStatus.Completed => InboxBeginState.DuplicateCompleted,
             InboxStatus.Failed => InboxBeginState.DuplicateFailed,
+            InboxStatus.Expired => InboxBeginState.Expired,
             _ => InboxBeginState.DuplicateInProgress
         };
+
+    private InboxEntry GetExisting(Guid entryId)
+        => _entriesById.TryGetValue(entryId, out var entry)
+            ? entry
+            : throw new InboxEntryNotFoundException(entryId);
 }
