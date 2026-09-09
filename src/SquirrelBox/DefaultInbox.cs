@@ -156,6 +156,13 @@ public sealed class DefaultInbox : IInboxService
     }
 
     /// <inheritdoc />
+    public void ReleaseCurrent()
+    {
+        if (Current is { } context)
+            RestorePreviousContext(context);
+    }
+
+    /// <inheritdoc />
     public async ValueTask CompleteCurrentAsync(
         InboxCompletion completion = null,
         CancellationToken cancellationToken = default)

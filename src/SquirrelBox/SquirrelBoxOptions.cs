@@ -33,12 +33,17 @@ public sealed class SquirrelBoxOptions
     public IList<Assembly> FingerprintProfileAssemblies { get; } = [];
 
     /// <summary>
+    /// Gets the assemblies scanned for declared SquirrelBox operations.
+    /// </summary>
+    public IList<Assembly> OperationAssemblies { get; } = [];
+
+    /// <summary>
     /// Gets the policy options used to classify duplicate, conflict, and missing key outcomes.
     /// </summary>
     public InboxPolicyOptions Policies { get; } = new();
 
     /// <summary>
-    /// Adds an assembly to the fingerprint profile discovery list.
+    /// Adds an assembly to the fingerprint profile and operation discovery lists.
     /// </summary>
     /// <param name="assembly">The assembly to scan.</param>
     /// <returns>The same options instance for fluent configuration.</returns>
@@ -49,11 +54,14 @@ public sealed class SquirrelBoxOptions
         if (!FingerprintProfileAssemblies.Contains(assembly))
             FingerprintProfileAssemblies.Add(assembly);
 
+        if (!OperationAssemblies.Contains(assembly))
+            OperationAssemblies.Add(assembly);
+
         return this;
     }
 
     /// <summary>
-    /// Adds the assembly containing <typeparamref name="TMarker"/> to the fingerprint profile discovery list.
+    /// Adds the assembly containing <typeparamref name="TMarker"/> to the discovery lists.
     /// </summary>
     /// <typeparam name="TMarker">A marker type from the assembly to scan.</typeparam>
     /// <returns>The same options instance for fluent configuration.</returns>

@@ -27,8 +27,10 @@ public static class SquirrelBoxServiceCollectionExtensions
         services.TryAddSingleton<IInboxPayloadFingerprinter, DefaultInboxPayloadFingerprinter>();
         services.TryAddSingleton<IInboxTransactionRunner, SuppressAmbientTransactionInboxRunner>();
         services.TryAddSingleton<IInboxPolicyResolver, DefaultInboxPolicyResolver>();
+        services.TryAddSingleton<ISquirrelBoxOperationRegistry, DefaultSquirrelBoxOperationRegistry>();
         services.AddSingleton<IInboxPayloadHasher, JsonInboxPayloadHasher>();
         services.AddScoped<IInboxService, DefaultInbox>();
+        services.AddScoped<ISquirrelBoxOperationService, DefaultSquirrelBoxOperationService>();
 
         return services;
     }

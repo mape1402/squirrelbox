@@ -106,6 +106,22 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task ReleaseCurrent_clears_context_without_completing_or_failing_entry()
+    {
+        var inbox = CreateInbox();
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For("http", "POST /orders", "order-1", new TestPayload("order-1")));
+
+        inbox.ReleaseCurrent();
+
+        var entry = await inbox.GetAsync(opened.Entry.Id);
+
+        Assert.Null(inbox.Current);
+        Assert.Equal(InboxStatus.Started, entry.Status);
+        Assert.Null(entry.CompletedOnUtc);
+        Assert.Null(entry.FailureDetails);
+    }
+
+    [Fact]
     public async Task OpenOrContinueAsync_detects_duplicate_in_progress_from_shared_store()
     {
         var provider = CreateProvider();
