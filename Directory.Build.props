@@ -5,6 +5,8 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
 
     <IsPackable>false</IsPackable>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
@@ -36,9 +38,9 @@
 
   <PropertyGroup>
     <Version Condition="'$(MinVerVersion)' != ''">$(MinVerVersion)</Version>
-    <Version Condition="'$(MinVerVersion)' == ''">1.0.0</Version>
+    <Version Condition="'$(MinVerVersion)' == ''">0.1.0</Version>
     <MinVerTagPrefix>v</MinVerTagPrefix>
-    <MinVerMinimumMajorMinor>1.0</MinVerMinimumMajorMinor>
+    <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
     <MinVerBuildMetadata>build.{DateTime:yyyyMMddHHmmss}</MinVerBuildMetadata>
     <MinVerIsRelease>false</MinVerIsRelease>
   </PropertyGroup>
