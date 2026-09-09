@@ -133,12 +133,14 @@ services.AddSquirrelBoxAspNetCore(options =>
     options.RequestHeaderNames.Clear();
     options.RequestHeaderNames.Add("Idempotency-Key");
     options.ResponseHeaderName = "Idempotency-Key";
+    options.CaptureCompletedResponses = true;
+    options.ReplayCompletedResponses = true;
 });
 
 app.UseSquirrelBox();
 ```
 
-If the request has an idempotency header, the middleware reserves the inbox entry before the endpoint runs.
+If the request has an idempotency header, the middleware reserves the inbox entry before the endpoint runs. Completed inline responses are captured with status code, body, content type, and configured response headers. A later duplicate completed request replays that stored response instead of entering the endpoint again.
 
 If the request has no header, the middleware does not hash the raw body. Your endpoint or Spider pipeline can open the inbox after model binding, using the DTO. The response still gets the effective key:
 
@@ -153,12 +155,17 @@ app.MapPost("/orders", async (
     if (!open.Accepted)
         return Results.Conflict();
 
+    var verification = await inbox.VerifyCurrentPayloadAsync(request, cancellationToken);
+    if (!verification.Success)
+        return Results.Conflict();
+
     await handler.Handle(request, cancellationToken);
-    await inbox.CompleteCurrentAsync(cancellationToken: cancellationToken);
 
     return Results.Ok();
 });
 ```
+
+When `UseSquirrelBox()` wraps the endpoint, inline entries owned by the current context are completed by the middleware after the HTTP response has been written to the capture buffer. If you complete manually inside the endpoint, pass your own `InboxCompletion`.
 
 ## Messaging
 
@@ -221,9 +228,13 @@ Inline execution is the default. Deferred execution is opt-in and pairs naturall
 
 ```csharp
 using Mule;
+using Mule.InMemory;
 using SquirrelBox.Mule;
 
 services.AddSquirrelBoxMule();
+services.AddMule(mule => mule
+    .UseInMemory()
+    .AddActionsFromAssemblyContaining<CreateOrderAction>());
 
 var open = await inbox.OpenOrContinueAsync(
     InboxOpenRequest.For(
@@ -243,7 +254,70 @@ if (open.State == InboxOpenState.Opened)
 }
 ```
 
-SquirrelBox reserves the inbox entry first. Mule receives metadata with `squirrelbox-inbox-id` and `idempotency-key` so the deferred action can keep traceability.
+SquirrelBox reserves the inbox entry first. Mule receives metadata with `squirrelbox-inbox-id` and `idempotency-key`, plus a deduplication key based on the inbox entry id when you do not provide one.
+
+Use `SquirrelBoxMuleAction<TPayload>` to rehydrate the inbox context inside the worker and complete or fail it with the durable action:
+
+```csharp
+[MuleAction("orders.create.v1")]
+public sealed class CreateOrderAction : SquirrelBoxMuleAction<CreateOrderRequest>
+{
+    private readonly OrderHandler _handler;
+
+    public CreateOrderAction(IInboxService inbox, OrderHandler handler)
+        : base(inbox)
+    {
+        _handler = handler;
+    }
+
+    protected override async ValueTask ExecuteInboxAsync(
+        SquirrelBoxMuleActionContext<CreateOrderRequest> context,
+        CancellationToken cancellationToken)
+    {
+        await _handler.Handle(context.Payload, cancellationToken);
+    }
+}
+```
+
+For HTTP endpoints that schedule Mule work, configure the middleware to open deferred entries for those routes:
+
+```csharp
+services.AddSquirrelBoxAspNetCore(options =>
+{
+    options.ExecutionModeResolver = context =>
+        context.Request.Path.StartsWithSegments("/orders/deferred")
+            ? InboxExecutionMode.Deferred
+            : InboxExecutionMode.Inline;
+});
+```
+
+The HTTP request returns quickly after scheduling the Mule action. The Mule action later calls `IInboxService.ContinueAsync(entryId)` through the base class and owns the final inbox completion.
+
+## Sample
+
+Run the sample app:
+
+```bash
+dotnet run --project samples/SquirrelBox.Sample/SquirrelBox.Sample.csproj --urls http://127.0.0.1:5188
+```
+
+Try these flows:
+
+```bash
+curl -i -X POST http://127.0.0.1:5188/orders/inline \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: inline-key-1" \
+  -d "{\"customerId\":\"cust-1\",\"externalOrderId\":\"inline-1\",\"amount\":42.5}"
+
+curl -i -X POST http://127.0.0.1:5188/orders/computed-key \
+  -H "Content-Type: application/json" \
+  -d "{\"customerId\":\"cust-2\",\"externalOrderId\":\"computed-1\",\"amount\":10,\"note\":\"ignored\"}"
+
+curl -i -X POST http://127.0.0.1:5188/orders/deferred \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: deferred-key-1" \
+  -d "{\"customerId\":\"cust-3\",\"externalOrderId\":\"deferred-1\",\"amount\":99.99}"
+```
 
 ## Why HTTP Does Not Hash Raw Bodies
 
@@ -255,8 +329,8 @@ The test suite covers:
 
 - Core open/continue, duplicate states, payload conflicts, policies, fingerprints, expiration, completion, and failure.
 - In-memory storage.
-- ASP.NET Core e2e flows for explicit headers and computed keys.
+- ASP.NET Core e2e flows for explicit header response replay and computed keys.
 - Messaging e2e flows for metadata keys and computed keys.
 - Pigeon consume interceptor behavior.
-- Mule scheduler metadata propagation.
+- Mule scheduler metadata propagation, action context rehydration, completion/failure handling, and hosted worker e2e execution.
 - EF Core SQL Server e2e flows using Docker, including concurrent duplicate reservation and ambient transaction suppression.
