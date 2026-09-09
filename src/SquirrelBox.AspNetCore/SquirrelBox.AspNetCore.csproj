@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox.AspNetCore</PackageId>
+    <Title>SquirrelBox ASP.NET Core Adapter</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>ASP.NET Core adapter shell for SquirrelBox HTTP idempotency.</Description>
+    <PackageTags>$(PackageTags);aspnetcore;http;web</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
+  </ItemGroup>
+
+</Project>

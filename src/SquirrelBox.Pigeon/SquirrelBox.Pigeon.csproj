@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox.Pigeon</PackageId>
+    <Title>SquirrelBox Pigeon Adapter</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>Pigeon messaging adapter shell for SquirrelBox consumer idempotency.</Description>
+    <PackageTags>$(PackageTags);pigeon;messaging;consumers</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SquirrelBox.AspNetCore/SquirrelBox.AspNetCore.csproj" />
+    <Project Path="src/SquirrelBox.EntityFrameworkCore/SquirrelBox.EntityFrameworkCore.csproj" />
+    <Project Path="src/SquirrelBox.InMemory/SquirrelBox.InMemory.csproj" />
+    <Project Path="src/SquirrelBox.Pigeon/SquirrelBox.Pigeon.csproj" />
+    <Project Path="src/SquirrelBox/SquirrelBox.csproj" />
+    <Project Path="src/TurtlePath.SquirrelBox/TurtlePath.SquirrelBox.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SquirrelBox.InMemory.Tests/SquirrelBox.InMemory.Tests.csproj" />
+    <Project Path="tests/SquirrelBox.Tests/SquirrelBox.Tests.csproj" />
+  </Folder>
+</Solution>

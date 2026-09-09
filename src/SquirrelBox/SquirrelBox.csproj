@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox</PackageId>
+    <Title>SquirrelBox Inbox Core</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>Core inbox and idempotency abstractions for protecting incoming HTTP, messaging, and application pipeline work from duplicate execution.</Description>
+    <PackageTags>$(PackageTags);core;contracts</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+
+</Project>
