@@ -7,6 +7,7 @@
     <Project Path="src/SquirrelBox/SquirrelBox.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/SquirrelBox.AspNetCore.Tests/SquirrelBox.AspNetCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.EntityFrameworkCore.Tests/SquirrelBox.EntityFrameworkCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.InMemory.Tests/SquirrelBox.InMemory.Tests.csproj" />
     <Project Path="tests/SquirrelBox.Tests/SquirrelBox.Tests.csproj" />
