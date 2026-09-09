@@ -3,8 +3,14 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace SquirrelBox;
 
+/// <summary>
+/// Provides dependency injection registration for the SquirrelBox core services.
+/// </summary>
 public static class SquirrelBoxServiceCollectionExtensions
 {
+    /// <summary>
+    /// Adds the SquirrelBox core services to the service collection.
+    /// </summary>
     public static IServiceCollection AddSquirrelBox(
         this IServiceCollection services,
         Action<SquirrelBoxOptions> configure = null)

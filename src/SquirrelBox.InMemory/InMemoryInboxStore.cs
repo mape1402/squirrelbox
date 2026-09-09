@@ -2,11 +2,15 @@ using System.Collections.Concurrent;
 
 namespace SquirrelBox.InMemory;
 
+/// <summary>
+/// In-memory implementation of <see cref="IInboxStore"/> for tests and local scenarios.
+/// </summary>
 public sealed class InMemoryInboxStore : IInboxStore
 {
     private readonly ConcurrentDictionary<string, InboxEntry> _entriesByKey = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Ulid, InboxEntry> _entriesById = new();
 
+    /// <inheritdoc />
     public ValueTask<InboxOpenResult> TryOpenAsync(InboxEntry entry, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
@@ -41,6 +45,7 @@ public sealed class InMemoryInboxStore : IInboxStore
         return ValueTask.FromResult(new InboxOpenResult(MapDuplicateState(stored), entry: stored));
     }
 
+    /// <inheritdoc />
     public ValueTask<InboxPayloadVerificationResult> AttachPayloadHashAsync(
         Ulid entryId,
         string payloadHash,
@@ -62,6 +67,7 @@ public sealed class InMemoryInboxStore : IInboxStore
         return ValueTask.FromResult(new InboxPayloadVerificationResult(InboxPayloadVerificationState.Verified, entry));
     }
 
+    /// <inheritdoc />
     public ValueTask MarkCompletedAsync(
         Ulid entryId,
         InboxCompletion completion,
@@ -78,6 +84,7 @@ public sealed class InMemoryInboxStore : IInboxStore
         return ValueTask.CompletedTask;
     }
 
+    /// <inheritdoc />
     public ValueTask MarkFailedAsync(
         Ulid entryId,
         InboxFailure failure,
@@ -94,6 +101,7 @@ public sealed class InMemoryInboxStore : IInboxStore
         return ValueTask.CompletedTask;
     }
 
+    /// <inheritdoc />
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => ValueTask.FromResult(GetExisting(entryId));
 
