@@ -17,6 +17,7 @@ public static class SquirrelBoxMuleServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddScoped<IInboxMuleScheduler, InboxMuleScheduler>();
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<ISquirrelBoxOperationDeferredScheduler, SquirrelBoxOperationMuleScheduler>());
         return services;
     }
 }
