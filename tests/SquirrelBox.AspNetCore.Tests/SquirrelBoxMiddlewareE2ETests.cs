@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -76,7 +77,8 @@ public sealed class SquirrelBoxMiddlewareE2ETests
                             await inbox.CompleteCurrentAsync();
                         }
 
-                        await context.Response.WriteAsJsonAsync(new { id = request.Id });
+                        context.Response.ContentType = "application/json";
+                        await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = request.Id }));
                     });
                 });
             });
