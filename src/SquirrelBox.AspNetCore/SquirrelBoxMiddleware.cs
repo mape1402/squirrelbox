@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace SquirrelBox.AspNetCore;
 
@@ -103,12 +104,13 @@ public sealed class SquirrelBoxMiddleware
             _ => StatusCodes.Status409Conflict
         };
 
-        return httpContext.Response.WriteAsJsonAsync(new
+        httpContext.Response.ContentType = "application/json";
+        return httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
         {
             decision.State,
             decision.Action,
             decision.EffectiveIdempotencyKey
-        });
+        }));
     }
 
     private string ResolveRequestKey(HttpContext httpContext)

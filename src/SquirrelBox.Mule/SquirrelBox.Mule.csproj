@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox.Mule</PackageId>
+    <Title>SquirrelBox Mule Deferred Adapter</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>Mule durable action adapter for deferring SquirrelBox inbox execution.</Description>
+    <PackageTags>$(PackageTags);mule;deferred;durable-actions</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mule.DurableActions" Version="1.4.1" />
+    <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
+  </ItemGroup>
+
+</Project>

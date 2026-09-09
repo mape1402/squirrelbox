@@ -4,6 +4,8 @@
     <Project Path="src/SquirrelBox.EntityFrameworkCore/SquirrelBox.EntityFrameworkCore.csproj" />
     <Project Path="src/SquirrelBox.InMemory/SquirrelBox.InMemory.csproj" />
     <Project Path="src/SquirrelBox.Messaging/SquirrelBox.Messaging.csproj" />
+    <Project Path="src/SquirrelBox.Messaging.Pigeon/SquirrelBox.Messaging.Pigeon.csproj" />
+    <Project Path="src/SquirrelBox.Mule/SquirrelBox.Mule.csproj" />
     <Project Path="src/SquirrelBox/SquirrelBox.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -11,6 +13,7 @@
     <Project Path="tests/SquirrelBox.EntityFrameworkCore.Tests/SquirrelBox.EntityFrameworkCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.InMemory.Tests/SquirrelBox.InMemory.Tests.csproj" />
     <Project Path="tests/SquirrelBox.Messaging.Tests/SquirrelBox.Messaging.Tests.csproj" />
+    <Project Path="tests/SquirrelBox.Mule.Tests/SquirrelBox.Mule.Tests.csproj" />
     <Project Path="tests/SquirrelBox.Tests/SquirrelBox.Tests.csproj" />
   </Folder>
 </Solution>
