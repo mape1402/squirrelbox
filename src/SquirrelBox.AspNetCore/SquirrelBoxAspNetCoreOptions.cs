@@ -34,6 +34,32 @@ public sealed class SquirrelBoxAspNetCoreOptions
     public bool AllowApplicationComputedKeys { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets whether completed inline HTTP responses are captured as inbox completion snapshots.
+    /// </summary>
+    public bool CaptureCompletedResponses { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether duplicate completed HTTP requests replay a stored response snapshot when one exists.
+    /// </summary>
+    public bool ReplayCompletedResponses { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the maximum response body size captured for replay, in bytes.
+    /// </summary>
+    public long MaxReplayBodyBytes { get; set; } = 1024 * 1024;
+
+    /// <summary>
+    /// Gets the response header names captured and replayed with completed HTTP snapshots.
+    /// </summary>
+    public ISet<string> CapturedResponseHeaderNames { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "Cache-Control",
+        "ETag",
+        "Location",
+        "Retry-After"
+    };
+
+    /// <summary>
     /// Gets or sets the source value used for entries opened by the HTTP middleware.
     /// </summary>
     public string Source { get; set; } = "http";
@@ -48,4 +74,22 @@ public sealed class SquirrelBoxAspNetCoreOptions
     /// </summary>
     public Func<HttpContext, string> OperationResolver { get; set; }
         = context => $"{context.Request.Method.ToUpperInvariant()} {context.Request.Path.Value}";
+
+    /// <summary>
+    /// Gets or sets the execution mode resolver for entries opened by the middleware.
+    /// </summary>
+    public Func<HttpContext, InboxExecutionMode?> ExecutionModeResolver { get; set; }
+        = _ => null;
+
+    /// <summary>
+    /// Gets or sets a predicate that determines whether the middleware should protect the current request.
+    /// </summary>
+    public Func<HttpContext, bool> ShouldHandleRequest { get; set; }
+        = _ => true;
+
+    /// <summary>
+    /// Gets or sets a predicate that determines whether the middleware should capture the current response for replay.
+    /// </summary>
+    public Func<HttpContext, bool> ShouldCaptureResponse { get; set; }
+        = _ => true;
 }

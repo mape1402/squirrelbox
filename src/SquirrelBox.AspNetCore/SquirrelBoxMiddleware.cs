@@ -36,7 +36,8 @@ public sealed class SquirrelBoxMiddleware
         ArgumentNullException.ThrowIfNull(inbox);
         ArgumentNullException.ThrowIfNull(policyResolver);
 
-        if (!_options.ProtectedMethods.Contains(httpContext.Request.Method))
+        if (!_options.ShouldHandleRequest(httpContext) ||
+            !_options.ProtectedMethods.Contains(httpContext.Request.Method))
         {
             await _next(httpContext);
             return;
@@ -62,12 +63,19 @@ public sealed class SquirrelBoxMiddleware
                 Operation = _options.OperationResolver(httpContext),
                 IdempotencyKey = key,
                 CorrelationId = httpContext.TraceIdentifier,
-                Owner = _options.Owner
+                Owner = _options.Owner,
+                ExecutionMode = _options.ExecutionModeResolver(httpContext)
             }, httpContext.RequestAborted);
 
             var decision = policyResolver.Resolve(openResult);
             if (decision.Action is not InboxPolicyAction.Continue)
             {
+                if (decision.Action is InboxPolicyAction.Replay &&
+                    await TryReplayDecisionAsync(httpContext, decision, responseHeaderName))
+                {
+                    return;
+                }
+
                 await WriteRejectedDecisionAsync(httpContext, decision);
                 return;
             }
@@ -78,20 +86,104 @@ public sealed class SquirrelBoxMiddleware
             return;
         }
 
+        var shouldCaptureResponse = _options.CaptureCompletedResponses &&
+                                    _options.ShouldCaptureResponse(httpContext);
+        var originalBody = httpContext.Response.Body;
+        MemoryStream capturedBody = null;
+
         try
         {
+            if (shouldCaptureResponse)
+            {
+                capturedBody = new MemoryStream();
+                httpContext.Response.Body = capturedBody;
+            }
+
             await _next(httpContext);
 
-            if (openResult?.State == InboxOpenState.Opened && ReferenceEquals(inbox.Current, openResult.Context))
-                await inbox.CompleteCurrentAsync(cancellationToken: httpContext.RequestAborted);
+            if (ResolveCompletableContext(inbox, openResult) is { } context &&
+                context.Entry.ExecutionMode == InboxExecutionMode.Inline)
+            {
+                await inbox.CompleteCurrentAsync(
+                    capturedBody is null ? null : CreateCompletion(httpContext, capturedBody),
+                    httpContext.RequestAborted);
+            }
         }
         catch (Exception exception)
         {
-            if (openResult?.State == InboxOpenState.Opened && ReferenceEquals(inbox.Current, openResult.Context))
+            if (ResolveCompletableContext(inbox, openResult) is not null)
                 await inbox.FailCurrentAsync(exception, httpContext.RequestAborted);
 
             throw;
         }
+        finally
+        {
+            if (capturedBody is not null)
+            {
+                httpContext.Response.Body = originalBody;
+                capturedBody.Position = 0;
+                await capturedBody.CopyToAsync(originalBody, httpContext.RequestAborted);
+                await capturedBody.DisposeAsync();
+            }
+        }
+    }
+
+    private async Task<bool> TryReplayDecisionAsync(
+        HttpContext httpContext,
+        InboxDecision decision,
+        string responseHeaderName)
+    {
+        if (!_options.ReplayCompletedResponses)
+            return false;
+
+        var completion = decision.Entry?.Completion;
+        if (completion?.StatusCode is null)
+            return false;
+
+        httpContext.Response.StatusCode = completion.StatusCode.Value;
+
+        if (!string.IsNullOrWhiteSpace(completion.ContentType))
+            httpContext.Response.ContentType = completion.ContentType;
+
+        if (!string.IsNullOrWhiteSpace(decision.EffectiveIdempotencyKey))
+            httpContext.Response.Headers[responseHeaderName] = decision.EffectiveIdempotencyKey;
+
+        foreach (var header in completion.Headers)
+        {
+            if (ShouldReplayHeader(header.Key))
+                httpContext.Response.Headers[header.Key] = header.Value;
+        }
+
+        if (completion.ResultPayload is { Length: > 0 } payload)
+            await httpContext.Response.Body.WriteAsync(payload, httpContext.RequestAborted);
+
+        return true;
+    }
+
+    private InboxCompletion CreateCompletion(HttpContext httpContext, MemoryStream capturedBody)
+    {
+        var completion = new InboxCompletion
+        {
+            ContentType = httpContext.Response.ContentType,
+            StatusCode = httpContext.Response.StatusCode,
+            ResultPayload = capturedBody.Length <= _options.MaxReplayBodyBytes
+                ? capturedBody.ToArray()
+                : null
+        };
+
+        foreach (var headerName in _options.CapturedResponseHeaderNames)
+        {
+            if (httpContext.Response.Headers.TryGetValue(headerName, out var value) &&
+                !string.IsNullOrWhiteSpace(value.ToString()))
+            {
+                completion.Headers[headerName] = value.ToString();
+            }
+        }
+
+        if (capturedBody.Length > _options.MaxReplayBodyBytes)
+            completion.Metadata["squirrelbox:http:body-too-large"] = "true";
+
+        return completion;
     }
 
     private static Task WriteRejectedDecisionAsync(HttpContext httpContext, InboxDecision decision)
@@ -111,6 +203,19 @@ public sealed class SquirrelBoxMiddleware
             decision.Action,
             decision.EffectiveIdempotencyKey
         }));
+    }
+
+    private bool ShouldReplayHeader(string headerName)
+        => !string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase) &&
+           !string.Equals(headerName, "Content-Type", StringComparison.OrdinalIgnoreCase) &&
+           _options.CapturedResponseHeaderNames.Contains(headerName);
+
+    private static InboxContext ResolveCompletableContext(IInboxService inbox, InboxOpenResult openResult)
+    {
+        var context = openResult?.Context ?? inbox.Current;
+        return context is { OwnsCompletion: true } && ReferenceEquals(inbox.Current, context)
+            ? context
+            : null;
     }
 
     private string ResolveRequestKey(HttpContext httpContext)

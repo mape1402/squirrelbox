@@ -14,7 +14,7 @@ namespace SquirrelBox.AspNetCore.Tests;
 public sealed class SquirrelBoxMiddlewareE2ETests
 {
     [Fact]
-    public async Task Middleware_reserves_explicit_header_before_endpoint_executes()
+    public async Task Middleware_replays_completed_response_for_duplicate_explicit_header()
     {
         using var server = CreateServer();
         using var client = server.CreateClient();
@@ -31,10 +31,16 @@ public sealed class SquirrelBoxMiddlewareE2ETests
 
         var duplicateResponse = await client.SendAsync(duplicate);
 
-        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        var firstBody = await firstResponse.Content.ReadAsStringAsync();
+        var duplicateBody = await duplicateResponse.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
         Assert.Equal("order-1", firstResponse.Headers.GetValues("Idempotency-Key").Single());
-        Assert.Equal(HttpStatusCode.Conflict, duplicateResponse.StatusCode);
+        Assert.Equal("\"order-1\"", firstResponse.Headers.ETag?.Tag);
+        Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
         Assert.Equal("order-1", duplicateResponse.Headers.GetValues("Idempotency-Key").Single());
+        Assert.Equal("\"order-1\"", duplicateResponse.Headers.ETag?.Tag);
+        Assert.Equal(firstBody, duplicateBody);
     }
 
     [Fact]
@@ -45,7 +51,7 @@ public sealed class SquirrelBoxMiddlewareE2ETests
 
         var response = await client.PostAsJsonAsync("/orders", new OrderRequest("order-computed"));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("Idempotency-Key", out var values));
         Assert.False(string.IsNullOrWhiteSpace(values.Single()));
     }
@@ -71,13 +77,19 @@ public sealed class SquirrelBoxMiddlewareE2ETests
                         var inbox = context.RequestServices.GetRequiredService<IInboxService>();
                         var result = await context.OpenSquirrelBoxAsync(inbox, request);
 
-                        if (result.State == InboxOpenState.Opened)
+                        if (result.Accepted)
                         {
-                            await inbox.VerifyCurrentPayloadAsync(request);
-                            await inbox.CompleteCurrentAsync();
+                            var verification = await inbox.VerifyCurrentPayloadAsync(request);
+                            if (!verification.Success)
+                            {
+                                context.Response.StatusCode = StatusCodes.Status409Conflict;
+                                return;
+                            }
                         }
 
+                        context.Response.StatusCode = StatusCodes.Status201Created;
                         context.Response.ContentType = "application/json";
+                        context.Response.Headers.ETag = $"\"{request.Id}\"";
                         await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = request.Id }));
                     });
                 });
