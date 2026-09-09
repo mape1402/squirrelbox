@@ -42,6 +42,7 @@ env:
   NUGET_OUTPUT: ./nupkgs
   NUGET_SOURCE: https://api.nuget.org/v3/index.json
   NUGET_USER: ${{ vars.NUGET_USER }}
+  SQUIRRELBOX_SQLSERVER: Server=localhost,1433;Database=SquirrelBoxTests;User Id=sa;Password=SquirrelBox_12345!;TrustServerCertificate=True;Encrypt=False
   RELEASE_BRANCH_PREFIX: releases/
   RELEASE_BRANCH_PATTERN: ^releases/v[0-9]+\.[0-9]+\.[0-9]+$
   RELEASE_MARKER_PATH: .release
@@ -51,6 +52,19 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: SquirrelBox_12345!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "bash -c '</dev/tcp/localhost/1433' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: write
       id-token: write
