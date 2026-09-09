@@ -4,15 +4,18 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v1.0.0] - Unreleased
+## [v0.1.0] - 2026-09-09
 
 ### Added
 
-- Initial SquirrelBox solution skeleton.
-- Added the core inbox/idempotency package with `IInboxService`.
-- Added in-memory, Entity Framework Core, ASP.NET Core, Messaging, and TurtlePath package shells.
-- Added ULID-based inbox entry identity.
-- Added ambient inbox context support for open-or-continue flows.
-- Added effective idempotency keys with explicit and computed-from-payload sources.
-- Added payload conflict detection, payload verification, completion snapshots, failure details, expiration, and execution mode modeling.
-- Renamed the messaging shell from `SquirrelBox.Pigeon` to `SquirrelBox.Messaging`.
+- Introduced the `SquirrelBox` core inbox package with ULID entry identity, ambient inbox context, open-or-continue lifecycle, payload verification, completion data, failure data, expiration, and inline/deferred execution modeling.
+- Added transport-neutral policies for duplicate completed, duplicate in-progress, duplicate failed, payload conflict, expired, and missing idempotency key outcomes.
+- Added semantic payload fingerprint profiles with assembly discovery, allowing payload hashes to be based on selected fields instead of raw JSON bodies.
+- Added transaction-suppressed inbox storage execution so reservations are persisted before protected business work and outside ambient application transactions.
+- Added `SquirrelBox.InMemory` for tests, samples, and local development.
+- Added `SquirrelBox.EntityFrameworkCore` with SQL Server e2e coverage, EF model configuration, durable storage, and unique reservation enforcement on source, operation, and idempotency key.
+- Added `SquirrelBox.AspNetCore` middleware and endpoint helpers for explicit HTTP idempotency headers and DTO-based computed keys.
+- Added `SquirrelBox.Messaging` for transport-neutral message contexts, topic/version/subscription operation resolution, metadata key discovery, and reply metadata propagation.
+- Added `SquirrelBox.Messaging.Pigeon` with a Pigeon consume interceptor that opens SquirrelBox inbox contexts from message metadata before `HubConsumer` execution.
+- Added `SquirrelBox.Mule` scheduler integration for tying Mule durable actions to the current SquirrelBox inbox context.
+- Added XML documentation generation and summary comments for public package APIs.
