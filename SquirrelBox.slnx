@@ -8,6 +8,9 @@
     <Project Path="src/SquirrelBox.Mule/SquirrelBox.Mule.csproj" />
     <Project Path="src/SquirrelBox/SquirrelBox.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/SquirrelBox.Sample/SquirrelBox.Sample.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SquirrelBox.AspNetCore.Tests/SquirrelBox.AspNetCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.EntityFrameworkCore.Tests/SquirrelBox.EntityFrameworkCore.Tests.csproj" />
