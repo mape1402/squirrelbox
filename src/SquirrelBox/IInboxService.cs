@@ -46,6 +46,11 @@ public interface IInboxService
     ValueTask<InboxPayloadVerificationResult> VerifyCurrentPayloadAsync(object payload, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Releases the current inbox context without completing or failing the entry.
+    /// </summary>
+    void ReleaseCurrent();
+
+    /// <summary>
     /// Marks the current inbox context as completed and restores the previous context.
     /// </summary>
     /// <param name="completion">Optional completion metadata.</param>

@@ -16,6 +16,7 @@ public static class SquirrelBoxHttpContextExtensions
     /// <param name="payload">The bound payload used to compute the semantic fingerprint when needed.</param>
     /// <param name="operation">Optional operation override.</param>
     /// <param name="source">Optional source override.</param>
+    /// <param name="executionMode">Optional execution mode override.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The open result.</returns>
     public static ValueTask<InboxOpenResult> OpenSquirrelBoxAsync<TPayload>(
@@ -24,6 +25,7 @@ public static class SquirrelBoxHttpContextExtensions
         TPayload payload,
         string operation = null,
         string source = "http",
+        InboxExecutionMode? executionMode = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(httpContext);
@@ -38,6 +40,7 @@ public static class SquirrelBoxHttpContextExtensions
             idempotencyKey,
             payload,
             httpContext.TraceIdentifier,
-            owner: "aspnetcore-endpoint"), cancellationToken);
+            owner: "aspnetcore-endpoint",
+            executionMode: executionMode), cancellationToken);
     }
 }
