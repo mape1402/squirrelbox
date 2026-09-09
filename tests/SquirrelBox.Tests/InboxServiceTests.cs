@@ -37,6 +37,41 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task ContinueAsync_sets_current_context_from_persisted_entry_id()
+    {
+        var provider = CreateProvider();
+        Ulid entryId;
+
+        using (var requestScope = provider.CreateScope())
+        {
+            var inbox = requestScope.ServiceProvider.GetRequiredService<IInboxService>();
+            var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                "order-1",
+                new TestPayload("order-1"),
+                executionMode: InboxExecutionMode.Deferred));
+
+            entryId = opened.Entry.Id;
+        }
+
+        await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var workerScope = provider.CreateScope();
+            var inbox = workerScope.ServiceProvider.GetRequiredService<IInboxService>();
+
+            var context = await inbox.ContinueAsync(entryId, owner: "mule");
+
+            Assert.NotNull(inbox.Current);
+            Assert.Equal(entryId, context.Entry.Id);
+            Assert.Equal(context, inbox.Current);
+            Assert.Equal("mule", context.Owner);
+            Assert.True(context.OwnsCompletion);
+            Assert.Equal(InboxExecutionMode.Deferred, context.Entry.ExecutionMode);
+        });
+    }
+
+    [Fact]
     public async Task CompleteCurrentAsync_marks_completed_and_clears_context()
     {
         var inbox = CreateInbox();
@@ -338,6 +373,17 @@ public sealed class InboxServiceTests
         }
 
         return await task;
+    }
+
+    private static async Task RunWithoutAmbientContextAsync(Func<Task> action)
+    {
+        Task task;
+        using (ExecutionContext.SuppressFlow())
+        {
+            task = Task.Run(action);
+        }
+
+        await task;
     }
 
     private sealed record TestPayload(string Id);

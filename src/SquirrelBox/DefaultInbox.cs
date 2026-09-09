@@ -107,6 +107,39 @@ public sealed class DefaultInbox : IInboxService
     }
 
     /// <inheritdoc />
+    public async ValueTask<InboxContext> ContinueAsync(
+        Ulid entryId,
+        string owner = null,
+        bool ownsCompletion = true,
+        CancellationToken cancellationToken = default)
+    {
+        _contextAccessor.Prepare();
+        var resolvedOwner = owner ?? _options.DefaultOwner;
+
+        if (Current is { } current &&
+            current.Entry.Id == entryId &&
+            string.Equals(current.Owner, resolvedOwner, StringComparison.Ordinal) &&
+            current.OwnsCompletion == ownsCompletion)
+        {
+            return current;
+        }
+
+        var entry = await _transactionRunner.RunAsync(
+            token => _store.GetAsync(entryId, token),
+            cancellationToken);
+
+        var context = new InboxContext(
+            entry,
+            resolvedOwner,
+            ownsCompletion,
+            Current);
+
+        SetCurrent(context);
+        _lastContext = context;
+        return context;
+    }
+
+    /// <inheritdoc />
     public async ValueTask<InboxPayloadVerificationResult> VerifyCurrentPayloadAsync(
         object payload,
         CancellationToken cancellationToken = default)
