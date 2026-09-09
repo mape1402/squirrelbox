@@ -5,7 +5,7 @@
     <PackageId>SquirrelBox.AspNetCore</PackageId>
     <Title>SquirrelBox ASP.NET Core Adapter</Title>
     <PackageType>Dependency</PackageType>
-    <Description>ASP.NET Core adapter shell for SquirrelBox HTTP idempotency.</Description>
+    <Description>ASP.NET Core adapter for SquirrelBox HTTP idempotency.</Description>
     <PackageTags>$(PackageTags);aspnetcore;http;web</PackageTags>
   </PropertyGroup>
 
