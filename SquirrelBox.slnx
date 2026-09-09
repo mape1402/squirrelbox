@@ -10,6 +10,7 @@
     <Project Path="tests/SquirrelBox.AspNetCore.Tests/SquirrelBox.AspNetCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.EntityFrameworkCore.Tests/SquirrelBox.EntityFrameworkCore.Tests.csproj" />
     <Project Path="tests/SquirrelBox.InMemory.Tests/SquirrelBox.InMemory.Tests.csproj" />
+    <Project Path="tests/SquirrelBox.Messaging.Tests/SquirrelBox.Messaging.Tests.csproj" />
     <Project Path="tests/SquirrelBox.Tests/SquirrelBox.Tests.csproj" />
   </Folder>
 </Solution>

@@ -5,7 +5,7 @@
     <PackageId>SquirrelBox.Messaging</PackageId>
     <Title>SquirrelBox Messaging Adapter</Title>
     <PackageType>Dependency</PackageType>
-    <Description>Transport-neutral messaging adapter shell for SquirrelBox consumer idempotency.</Description>
+    <Description>Transport-neutral messaging adapter for SquirrelBox consumer idempotency.</Description>
     <PackageTags>$(PackageTags);messaging;consumers</PackageTags>
   </PropertyGroup>
 
