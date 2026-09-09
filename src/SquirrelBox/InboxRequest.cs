@@ -14,9 +14,11 @@ public sealed class InboxRequest
 
     public string CorrelationId { get; init; }
 
-    public InboxExecutionMode ExecutionMode { get; init; } = InboxExecutionMode.Inline;
+    public InboxExecutionMode? ExecutionMode { get; init; }
 
     public DateTimeOffset? ExpiresOnUtc { get; init; }
+
+    public Dictionary<string, string> Metadata { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     public static InboxRequest For<TPayload>(
         string source,
@@ -24,7 +26,7 @@ public sealed class InboxRequest
         string idempotencyKey,
         TPayload payload,
         string correlationId = null,
-        InboxExecutionMode executionMode = InboxExecutionMode.Inline,
+        InboxExecutionMode? executionMode = null,
         DateTimeOffset? expiresOnUtc = null)
         => new()
         {
