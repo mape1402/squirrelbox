@@ -9,23 +9,29 @@ public sealed class DefaultInbox : IInboxService
     private readonly IInboxPayloadHasher _payloadHasher;
     private readonly IInboxStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly IInboxTransactionRunner _transactionRunner;
     private InboxContext _current;
+    private InboxContext _lastContext;
 
     public DefaultInbox(
         IOptions<SquirrelBoxOptions> options,
         IInboxContextAccessor contextAccessor,
         IInboxPayloadHasher payloadHasher,
         IInboxStore store,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IInboxTransactionRunner transactionRunner)
     {
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
         _payloadHasher = payloadHasher ?? throw new ArgumentNullException(nameof(payloadHasher));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _transactionRunner = transactionRunner ?? throw new ArgumentNullException(nameof(transactionRunner));
     }
 
     public InboxContext Current => _current ?? _contextAccessor.Current;
+
+    public InboxContext LastContext => _lastContext;
 
     public async ValueTask<InboxOpenResult> OpenOrContinueAsync(InboxOpenRequest request, CancellationToken cancellationToken = default)
     {
@@ -71,7 +77,7 @@ public sealed class DefaultInbox : IInboxService
             Metadata = new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase)
         };
 
-        var result = await _store.TryOpenAsync(entry, cancellationToken);
+        var result = await _transactionRunner.RunAsync(token => _store.TryOpenAsync(entry, token), cancellationToken);
         if (result.State == InboxOpenState.Opened)
         {
             var context = new InboxContext(
@@ -81,8 +87,12 @@ public sealed class DefaultInbox : IInboxService
                 Current);
 
             SetCurrent(context);
+            _lastContext = context;
             return new InboxOpenResult(InboxOpenState.Opened, context);
         }
+
+        if (result.Entry is not null)
+            _lastContext = new InboxContext(result.Entry, request.Owner ?? _options.DefaultOwner, false, Current);
 
         return result;
     }
@@ -97,7 +107,9 @@ public sealed class DefaultInbox : IInboxService
         ArgumentNullException.ThrowIfNull(payload);
 
         var payloadHash = _payloadHasher.ComputeHash(payload);
-        return await _store.AttachPayloadHashAsync(context.Entry.Id, payloadHash, cancellationToken);
+        return await _transactionRunner.RunAsync(
+            token => _store.AttachPayloadHashAsync(context.Entry.Id, payloadHash, token),
+            cancellationToken);
     }
 
     public async ValueTask CompleteCurrentAsync(
@@ -106,10 +118,12 @@ public sealed class DefaultInbox : IInboxService
     {
         var context = GetRequiredContext();
 
-        await _store.MarkCompletedAsync(
-            context.Entry.Id,
-            completion ?? InboxCompletion.Empty,
-            _timeProvider.GetUtcNow(),
+        await _transactionRunner.RunAsync(
+            token => _store.MarkCompletedAsync(
+                context.Entry.Id,
+                completion ?? InboxCompletion.Empty,
+                _timeProvider.GetUtcNow(),
+                token),
             cancellationToken);
 
         RestorePreviousContext(context);
@@ -126,13 +140,15 @@ public sealed class DefaultInbox : IInboxService
         ArgumentNullException.ThrowIfNull(failure);
         var context = GetRequiredContext();
 
-        await _store.MarkFailedAsync(context.Entry.Id, failure, _timeProvider.GetUtcNow(), cancellationToken);
+        await _transactionRunner.RunAsync(
+            token => _store.MarkFailedAsync(context.Entry.Id, failure, _timeProvider.GetUtcNow(), token),
+            cancellationToken);
 
         RestorePreviousContext(context);
     }
 
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
-        => _store.GetAsync(entryId, cancellationToken);
+        => _transactionRunner.RunAsync(token => _store.GetAsync(entryId, token), cancellationToken);
 
     private DateTimeOffset? ResolveDefaultExpiration(DateTimeOffset now)
         => _options.DefaultEntryLifetime is { } lifetime && lifetime > TimeSpan.Zero

@@ -198,6 +198,62 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task OpenOrContinueAsync_uses_discovered_fingerprint_profile_for_payload_hash()
+    {
+        var provider = CreateProvider(config => config.ScanAssemblyContaining<ProfiledPayloadFingerprintProfile>());
+        var first = provider.GetRequiredService<IInboxService>();
+        var second = provider.GetRequiredService<IInboxService>();
+
+        var opened = await first.OpenOrContinueAsync(InboxOpenRequest.For(
+            "spider",
+            "Profiled",
+            payload: new ProfiledPayload("same", "ignored-1")));
+        await first.CompleteCurrentAsync();
+
+        var duplicate = await second.OpenOrContinueAsync(InboxOpenRequest.For(
+            "spider",
+            "Profiled",
+            payload: new ProfiledPayload("same", "ignored-2")));
+
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.State);
+        Assert.Equal(opened.EffectiveIdempotencyKey, duplicate.EffectiveIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task LastContext_keeps_effective_key_after_current_context_is_completed()
+    {
+        var inbox = CreateInbox();
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+            "spider",
+            "CreateOrderRequest",
+            payload: new TestPayload("order-1")));
+
+        await inbox.CompleteCurrentAsync();
+
+        Assert.Null(inbox.Current);
+        Assert.NotNull(inbox.LastContext);
+        Assert.Equal(opened.EffectiveIdempotencyKey, inbox.LastContext.EffectiveIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task PolicyResolver_maps_duplicate_completed_to_replay_by_default()
+    {
+        var provider = CreateProvider();
+        var first = provider.GetRequiredService<IInboxService>();
+        var second = provider.GetRequiredService<IInboxService>();
+        var resolver = provider.GetRequiredService<IInboxPolicyResolver>();
+
+        await first.OpenOrContinueAsync(InboxOpenRequest.For("http", "POST /orders", "order-1", new TestPayload("order-1")));
+        await first.CompleteCurrentAsync();
+
+        var duplicate = await second.OpenOrContinueAsync(InboxOpenRequest.For("http", "POST /orders", "order-1", new TestPayload("order-1")));
+        var decision = resolver.Resolve(duplicate);
+
+        Assert.Equal(InboxPolicyAction.Replay, decision.Action);
+        Assert.False(decision.ShouldExecute);
+    }
+
+    [Fact]
     public async Task OpenOrContinueAsync_reports_expired_for_duplicate_after_expiration()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
@@ -251,7 +307,13 @@ public sealed class InboxServiceTests
     private static ServiceProvider CreateProvider()
         => CreateProvider(new SquirrelBoxOptions(), new ManualTimeProvider(DateTimeOffset.UtcNow));
 
+    private static ServiceProvider CreateProvider(Action<SquirrelBoxOptions> configure)
+        => CreateProvider(new SquirrelBoxOptions(), new ManualTimeProvider(DateTimeOffset.UtcNow), configure);
+
     private static ServiceProvider CreateProvider(SquirrelBoxOptions options, TimeProvider timeProvider)
+        => CreateProvider(options, timeProvider, null);
+
+    private static ServiceProvider CreateProvider(SquirrelBoxOptions options, TimeProvider timeProvider, Action<SquirrelBoxOptions> configure)
     {
         var services = new ServiceCollection();
         services.AddSingleton(timeProvider);
@@ -261,6 +323,7 @@ public sealed class InboxServiceTests
             config.DefaultExecutionMode = options.DefaultExecutionMode;
             config.AllowPayloadHashAsIdempotencyKey = options.AllowPayloadHashAsIdempotencyKey;
             config.DefaultOwner = options.DefaultOwner;
+            configure?.Invoke(config);
         }).UseInMemory();
 
         return services.BuildServiceProvider();
@@ -278,6 +341,14 @@ public sealed class InboxServiceTests
     }
 
     private sealed record TestPayload(string Id);
+
+    private sealed record ProfiledPayload(string StableId, string IgnoredValue);
+
+    private sealed class ProfiledPayloadFingerprintProfile : InboxFingerprintProfile
+    {
+        public override void Configure(InboxFingerprintProfileBuilder builder)
+            => builder.For<ProfiledPayload>().Use(payload => new { payload.StableId });
+    }
 
     private sealed class ManualTimeProvider : TimeProvider
     {
