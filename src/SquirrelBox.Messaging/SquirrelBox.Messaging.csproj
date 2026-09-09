@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox.Messaging</PackageId>
+    <Title>SquirrelBox Messaging Adapter</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>Transport-neutral messaging adapter shell for SquirrelBox consumer idempotency.</Description>
+    <PackageTags>$(PackageTags);messaging;consumers</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -2,13 +2,15 @@ namespace SquirrelBox;
 
 public sealed class InboxEntry
 {
-    public Guid Id { get; set; }
+    public Ulid Id { get; set; }
 
     public string Source { get; set; }
 
     public string Operation { get; set; }
 
     public string IdempotencyKey { get; set; }
+
+    public InboxIdempotencyKeySource IdempotencyKeySource { get; set; }
 
     public string PayloadHash { get; set; }
 

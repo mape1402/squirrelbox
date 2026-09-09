@@ -1,11 +1,13 @@
 namespace SquirrelBox;
 
-public enum InboxBeginState
+public enum InboxOpenState
 {
-    Started,
+    Opened,
+    Continued,
     DuplicateInProgress,
     DuplicateCompleted,
     DuplicateFailed,
     PayloadConflict,
-    Expired
+    Expired,
+    MissingIdempotencyKey
 }
