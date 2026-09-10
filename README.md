@@ -42,7 +42,7 @@ using SquirrelBox;
 using SquirrelBox.EntityFrameworkCore;
 using SquirrelBox.Mule;
 
-services.AddDbContextFactory<AppDbContext>(options =>
+services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(connectionString));
 
 services
@@ -60,15 +60,8 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
 ```
 
-Configure the EF model:
-
-```csharp
-public sealed class AppDbContext : DbContext
-{
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-        => modelBuilder.ApplySquirrelBox();
-}
-```
+SquirrelBox augments the registered `AppDbContext` automatically. Your application `DbContext`
+does not need SquirrelBox `DbSet` properties or `OnModelCreating` changes.
 
 Use `UseInMemory()` instead of EF for tests, samples, and local development.
 

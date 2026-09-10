@@ -11,15 +11,24 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
     where TDbContext : DbContext
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly IDbContextFactory<TDbContext> _dbContextFactory;
+    private readonly ISquirrelBoxDbContextFactory<TDbContext> _dbContextFactory;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EntityFrameworkOutboxStore{TDbContext}"/> class.
+    /// </summary>
+    /// <param name="dbContextFactory">The DbContext factory used to create short-lived SquirrelBox contexts.</param>
+    internal EntityFrameworkOutboxStore(ISquirrelBoxDbContextFactory<TDbContext> dbContextFactory)
+    {
+        _dbContextFactory = dbContextFactory ?? throw new ArgumentNullException(nameof(dbContextFactory));
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EntityFrameworkOutboxStore{TDbContext}"/> class.
     /// </summary>
     /// <param name="dbContextFactory">The DbContext factory used to create short-lived outbox contexts.</param>
     public EntityFrameworkOutboxStore(IDbContextFactory<TDbContext> dbContextFactory)
+        : this(new SquirrelBoxDbContextFactoryAdapter<TDbContext>(dbContextFactory))
     {
-        _dbContextFactory = dbContextFactory ?? throw new ArgumentNullException(nameof(dbContextFactory));
     }
 
     /// <inheritdoc />
@@ -27,7 +36,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         dbContext.Set<SquirrelBoxOutboxEnvelopeRecord>().Add(ToRecord(envelope));
         await dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -35,7 +44,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
     /// <inheritdoc />
     public async ValueTask<OutboxEnvelope> GetAsync(Ulid envelopeId, CancellationToken cancellationToken = default)
     {
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         return ToEnvelope(await FindByIdAsync(dbContext, envelopeId, cancellationToken));
     }
 
@@ -45,7 +54,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         DateTimeOffset publishingOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, envelopeId, cancellationToken);
         record.Status = OutboxStatus.Publishing.ToString();
         record.PublishingOnUtc = publishingOnUtc;
@@ -59,7 +68,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         DateTimeOffset publishedOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, envelopeId, cancellationToken);
         record.Status = OutboxStatus.Published.ToString();
         record.PublishedOnUtc = publishedOnUtc;
@@ -75,7 +84,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         DateTimeOffset? nextAttemptOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, envelopeId, cancellationToken);
         record.Status = OutboxStatus.Failed.ToString();
         record.Attempts++;
@@ -91,7 +100,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         DateTimeOffset discardedOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, envelopeId, cancellationToken);
         record.Status = OutboxStatus.Discarded.ToString();
         record.UpdatedOnUtc = discardedOnUtc;
@@ -105,7 +114,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
     {
         query ??= new OutboxQuery();
 
-        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var dbContext = _dbContextFactory.CreateDbContext();
         var records = dbContext.Set<SquirrelBoxOutboxEnvelopeRecord>().AsNoTracking().AsQueryable();
 
         if (query.Status is { } status)

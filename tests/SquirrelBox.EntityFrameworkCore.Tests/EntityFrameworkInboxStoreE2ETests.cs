@@ -1,4 +1,5 @@
 using System.Transactions;
+using System.Threading;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,13 +13,12 @@ public sealed class EntityFrameworkInboxStoreE2ETests
     public async Task SqlServer_store_reserves_before_business_execution_and_deduplicates_concurrent_requests()
     {
         var connectionString = CreateIsolatedConnectionString();
-        await EnsureDatabaseAsync(connectionString);
-
         var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
         var executions = 0;
 
-        var first = Task.Run(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
-        var second = Task.Run(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
+        var first = RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
+        var second = RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
 
         var results = await Task.WhenAll(first, second);
         var accepted = results.Single(result => result.State == InboxOpenState.Opened);
@@ -39,8 +39,8 @@ public sealed class EntityFrameworkInboxStoreE2ETests
     public async Task SqlServer_store_suppresses_ambient_transaction_when_opening_entry()
     {
         var connectionString = CreateIsolatedConnectionString();
-        await EnsureDatabaseAsync(connectionString);
         var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
         Ulid entryId;
 
         using (var transaction = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
@@ -83,10 +83,21 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         return result;
     }
 
+    private static async Task<T> RunWithoutAmbientContextAsync<T>(Func<Task<T>> action)
+    {
+        Task<T> task;
+        using (ExecutionContext.SuppressFlow())
+        {
+            task = Task.Run(action);
+        }
+
+        return await task;
+    }
+
     private static ServiceProvider CreateProvider(string connectionString)
     {
         var services = new ServiceCollection();
-        services.AddDbContextFactory<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
+        services.AddDbContext<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
         services
             .AddSquirrelBox()
             .UseEntityFrameworkInbox<TestInboxDbContext>();
@@ -94,13 +105,12 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         return services.BuildServiceProvider();
     }
 
-    private static async Task EnsureDatabaseAsync(string connectionString)
+    private static async Task EnsureDatabaseAsync(ServiceProvider provider)
     {
-        await using var dbContext = new TestInboxDbContext(
-            new DbContextOptionsBuilder<TestInboxDbContext>()
-                .UseSqlServer(connectionString)
-                .Options);
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<TestInboxDbContext>();
 
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SquirrelBoxInboxEntryRecord)));
         await dbContext.Database.EnsureCreatedAsync();
     }
 
@@ -122,10 +132,5 @@ public sealed class EntityFrameworkInboxStoreE2ETests
             : base(options)
         {
         }
-
-        public DbSet<SquirrelBoxInboxEntryRecord> InboxEntries => Set<SquirrelBoxInboxEntryRecord>();
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-            => modelBuilder.ApplySquirrelBoxInbox();
     }
 }

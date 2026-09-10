@@ -11,8 +11,8 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
     public async Task SqlServer_outbox_persists_and_publishes_envelope()
     {
         var connectionString = CreateIsolatedConnectionString();
-        await EnsureDatabaseAsync(connectionString);
         var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
 
         Ulid envelopeId;
         using (var scope = provider.CreateScope())
@@ -49,8 +49,8 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
     public async Task SqlServer_combined_model_queries_inbox_and_outbox_history()
     {
         var connectionString = CreateIsolatedConnectionString();
-        await EnsureDatabaseAsync(connectionString);
         var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
 
         using (var scope = provider.CreateScope())
         {
@@ -89,7 +89,7 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
         var services = new ServiceCollection();
         services.AddSingleton<TestOutboxPublisher>();
         services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
-        services.AddDbContextFactory<TestSquirrelBoxDbContext>(options => options.UseSqlServer(connectionString));
+        services.AddDbContext<TestSquirrelBoxDbContext>(options => options.UseSqlServer(connectionString));
         services
             .AddSquirrelBox()
             .UseEntityFramework<TestSquirrelBoxDbContext>();
@@ -97,13 +97,13 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
         return services.BuildServiceProvider();
     }
 
-    private static async Task EnsureDatabaseAsync(string connectionString)
+    private static async Task EnsureDatabaseAsync(ServiceProvider provider)
     {
-        await using var dbContext = new TestSquirrelBoxDbContext(
-            new DbContextOptionsBuilder<TestSquirrelBoxDbContext>()
-                .UseSqlServer(connectionString)
-                .Options);
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<TestSquirrelBoxDbContext>();
 
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SquirrelBoxInboxEntryRecord)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SquirrelBoxOutboxEnvelopeRecord)));
         await dbContext.Database.EnsureCreatedAsync();
     }
 
@@ -140,12 +140,5 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
             : base(options)
         {
         }
-
-        public DbSet<SquirrelBoxInboxEntryRecord> InboxEntries => Set<SquirrelBoxInboxEntryRecord>();
-
-        public DbSet<SquirrelBoxOutboxEnvelopeRecord> OutboxEnvelopes => Set<SquirrelBoxOutboxEnvelopeRecord>();
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-            => modelBuilder.ApplySquirrelBox();
     }
 }
