@@ -34,16 +34,13 @@ Package reference example:
 
 ## Getting Started
 
-Register core services, choose storage, and add Mule when you want durable deferred execution:
+Register core services, choose an Inbox/Outbox store, and add Mule when you want durable deferred execution:
 
 ```csharp
 using Mule.InMemory;
 using SquirrelBox;
-using SquirrelBox.EntityFrameworkCore;
+using SquirrelBox.InMemory;
 using SquirrelBox.Mule;
-
-services.AddDbContextFactory<AppDbContext>(options =>
-    options.UseSqlServer(connectionString));
 
 services
     .AddSquirrelBox(options =>
@@ -52,7 +49,7 @@ services
         options.AllowPayloadHashAsIdempotencyKey = true;
         options.ScanAssemblyContaining<OrdersFingerprintProfile>();
     })
-    .UseEntityFramework<AppDbContext>();
+    .UseInMemory();
 
 services.AddSquirrelBoxMule();
 services.AddMule(mule => mule
@@ -60,7 +57,22 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
 ```
 
-Configure the EF model:
+`AddSquirrelBoxMule()` does not require changes to your application's `DbContext`. Mule owns durable scheduling through its own integration path.
+
+If you choose `SquirrelBox.EntityFrameworkCore` as the SquirrelBox Inbox/Outbox store, then configure SquirrelBox's EF records explicitly:
+
+```csharp
+using SquirrelBox.EntityFrameworkCore;
+
+services.AddDbContextFactory<AppDbContext>(options =>
+    options.UseSqlServer(connectionString));
+
+services
+    .AddSquirrelBox(options => options.ScanAssemblyContaining<OrdersFingerprintProfile>())
+    .UseEntityFramework<AppDbContext>();
+```
+
+And only in that EF-store case, map the SquirrelBox entities:
 
 ```csharp
 public sealed class AppDbContext : DbContext
@@ -70,7 +82,7 @@ public sealed class AppDbContext : DbContext
 }
 ```
 
-Use `UseInMemory()` instead of EF for tests, samples, and local development.
+Use `UseInMemory()` for tests, samples, local development, or any scenario where you do not want SquirrelBox to add EF mappings.
 
 ## Inbox
 
