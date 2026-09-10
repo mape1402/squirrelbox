@@ -1,8 +1,13 @@
 # SquirrelBox
 
-SquirrelBox is the Elysium inbox/idempotency toolkit for .NET services.
+[![Build](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
+[![NuGet](https://img.shields.io/nuget/v/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
+[![Downloads](https://img.shields.io/nuget/dt/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
+[![License](https://img.shields.io/github/license/mape1402/squirrelbox.svg)](LICENSE)
 
-It protects incoming work from accidental duplicate execution across HTTP requests, messaging consumers, and application pipelines. The core is transport-neutral: adapters translate HTTP, messaging, Pigeon, and Mule concepts into the same inbox model.
+SquirrelBox is the Elysium inbox/outbox toolkit for .NET services.
+
+It protects incoming work from duplicate execution with the inbox pattern, persists outgoing work with the outbox pattern, and uses Mule durable actions for deferred execution. The core is transport-neutral: HTTP, messaging, Pigeon, custom transports, and dashboard diagnostics all use the same model.
 
 ## Packages
 
@@ -11,50 +16,72 @@ dotnet add package SquirrelBox
 dotnet add package SquirrelBox.InMemory
 dotnet add package SquirrelBox.EntityFrameworkCore
 dotnet add package SquirrelBox.AspNetCore
+dotnet add package SquirrelBox.AspNetCore.Dashboard
 dotnet add package SquirrelBox.Messaging
 dotnet add package SquirrelBox.Messaging.Pigeon
 dotnet add package SquirrelBox.Mule
 ```
 
+Package reference example:
+
+```xml
+<PackageReference Include="SquirrelBox" Version="2.0.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="2.0.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.0.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.0.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="2.0.0" />
+```
+
 ## Getting Started
 
-Register the core and choose one storage provider:
+Register core services, choose storage, and add Mule when you want durable deferred execution:
 
 ```csharp
+using Mule.InMemory;
 using SquirrelBox;
-using SquirrelBox.InMemory;
+using SquirrelBox.EntityFrameworkCore;
+using SquirrelBox.Mule;
+
+services.AddDbContextFactory<AppDbContext>(options =>
+    options.UseSqlServer(connectionString));
 
 services
     .AddSquirrelBox(options =>
     {
         options.DefaultEntryLifetime = TimeSpan.FromHours(24);
         options.AllowPayloadHashAsIdempotencyKey = true;
-        options.ScanAssemblyContaining<OrdersInboxFingerprintProfile>();
+        options.ScanAssemblyContaining<OrdersFingerprintProfile>();
     })
-    .UseInMemory();
+    .UseEntityFramework<AppDbContext>();
+
+services.AddSquirrelBoxMule();
+services.AddMule(mule => mule
+    .UseInMemory()
+    .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
+    .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
 ```
 
-Use EF Core for durable storage:
+Configure the EF model:
 
 ```csharp
-using Microsoft.EntityFrameworkCore;
-using SquirrelBox.EntityFrameworkCore;
-
-services.AddDbContextFactory<AppDbContext>(options =>
-    options.UseSqlServer(connectionString));
-
-services
-    .AddSquirrelBox()
-    .UseEntityFrameworkInbox<AppDbContext>();
-
 public sealed class AppDbContext : DbContext
 {
     protected override void OnModelCreating(ModelBuilder modelBuilder)
-        => modelBuilder.ApplySquirrelBoxInbox();
+        => modelBuilder.ApplySquirrelBox();
 }
 ```
 
-## Core Usage
+Use `UseInMemory()` instead of EF for tests, samples, and local development.
+
+## Inbox
+
+The inbox pattern identifies incoming work by:
+
+```text
+Source + Operation + IdempotencyKey
+```
+
+Basic usage:
 
 ```csharp
 var open = await inbox.OpenOrContinueAsync(
@@ -80,23 +107,11 @@ catch (Exception ex)
 }
 ```
 
-SquirrelBox identifies work by:
-
-```text
-Source + Operation + IdempotencyKey
-```
-
-Entries use ULID ids and move through:
-
-```text
-Started -> Completed
-Started -> Failed
-Started -> Expired
-```
+Entries use ULID ids and move through `Started`, `Completed`, `Failed`, and `Expired`.
 
 ## Declared Operations
 
-HTTP and other synchronous transports can use declared operations when they need inline/deferred execution that can be switched by configuration.
+Declared operations are the durable-safe path for switching HTTP or other synchronous entry points between inline and deferred execution.
 
 ```csharp
 public sealed class CreateOrderOperation
@@ -113,7 +128,7 @@ public sealed class CreateOrderOperation
 }
 ```
 
-Invoke the operation from an endpoint:
+Invoke from an endpoint:
 
 ```csharp
 var result = await operations
@@ -130,14 +145,63 @@ if (result.Executed)
 return Results.Conflict(result.Decision);
 ```
 
-When the entry is inline, SquirrelBox executes the operation and completes the inbox entry. When the entry is deferred, SquirrelBox stores a durable operation envelope through Mule and releases the current context without completing the inbox entry.
+When execution is deferred, SquirrelBox stores the inbox entry first, schedules a Mule durable action, and completes/fails the inbox later from a worker scope.
 
-## Payload Fingerprints
+## Outbox
 
-When no idempotency key is received, SquirrelBox can compute one from the semantic payload. Profiles let you decide which fields matter.
+The outbox pattern persists outgoing work before it is delivered by a transport.
 
 ```csharp
-public sealed class OrdersInboxFingerprintProfile : InboxFingerprintProfile
+var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
+{
+    Transport = "pigeon",
+    Operation = "orders.created",
+    Destination = "orders",
+    Payload = new OrderCreated(orderId),
+    CorrelationId = correlationId
+}, cancellationToken);
+```
+
+SquirrelBox stores an `OutboxEnvelope` with:
+
+```text
+Ulid Id
+Transport
+Operation
+Destination
+PayloadType
+Payload
+Headers
+Metadata
+CorrelationId
+Status
+```
+
+Mule later executes `squirrelbox.outbox.publish.v1`, loads the envelope by ULID, resolves the matching `IOutboxTransportPublisher`, and marks the envelope as `Published` or `Failed`.
+
+Custom publisher:
+
+```csharp
+public sealed class MyPublisher : IOutboxTransportPublisher
+{
+    public string Transport => "my-transport";
+
+    public async ValueTask<OutboxPublishResult> PublishAsync(
+        OutboxEnvelope envelope,
+        CancellationToken cancellationToken = default)
+    {
+        await client.SendAsync(envelope.Payload, cancellationToken);
+        return OutboxPublishResult.Success;
+    }
+}
+```
+
+## Profiles
+
+Inbox fingerprints and outbox profiles are discovered from scanned assemblies.
+
+```csharp
+public sealed class OrdersFingerprintProfile : InboxFingerprintProfile
 {
     public override void Configure(InboxFingerprintProfileBuilder builder)
     {
@@ -152,16 +216,11 @@ public sealed class OrdersInboxFingerprintProfile : InboxFingerprintProfile
 }
 ```
 
-Profiles are discovered from assemblies:
-
-```csharp
-services.AddSquirrelBox(options =>
-    options.ScanAssemblyContaining<OrdersInboxFingerprintProfile>());
-```
+Outbox profiles can customize how enqueue requests become durable envelopes without adding noisy fluent configuration.
 
 ## ASP.NET Core
 
-Add the HTTP middleware:
+Add HTTP idempotency:
 
 ```csharp
 using SquirrelBox.AspNetCore;
@@ -178,45 +237,60 @@ services.AddSquirrelBoxAspNetCore(options =>
 app.UseSquirrelBox();
 ```
 
-If the request has an idempotency header, the middleware reserves the inbox entry before the endpoint runs. Completed inline responses are captured with status code, body, content type, and configured response headers. A later duplicate completed request replays that stored response instead of entering the endpoint again.
+If a request has an idempotency header, middleware reserves the inbox entry before the endpoint runs. If the request does not have a header, your endpoint can open SquirrelBox after model binding so the computed key is based on the DTO instead of raw body bytes.
 
-If the request has no header, the middleware does not hash the raw body. Your endpoint can open the inbox after model binding, using the DTO. The response still gets the effective key:
+## Dashboard
+
+Add the event-driven dashboard:
 
 ```csharp
-app.MapPost("/orders", async (
-    CreateOrderRequest request,
-    HttpContext http,
-    IInboxService inbox,
-    CancellationToken cancellationToken) =>
+using SquirrelBox.AspNetCore.Dashboard;
+
+services.AddSquirrelBoxDashboard(options =>
 {
-    var open = await http.OpenSquirrelBoxAsync(inbox, request, cancellationToken: cancellationToken);
-    if (!open.Accepted)
-        return Results.Conflict();
+    options.Authentication.RootUser.Username = "admin";
+    options.Authentication.RootUser.Password = "<from-secret-store>";
+});
 
-    var verification = await inbox.VerifyCurrentPayloadAsync(request, cancellationToken);
-    if (!verification.Success)
-        return Results.Conflict();
+app.MapSquirrelBoxDashboard("/squirrelbox");
+```
 
-    await handler.Handle(request, cancellationToken);
+The dashboard:
 
-    return Results.Ok();
+- Loads initial Inbox/Outbox history from storage.
+- Receives live events through Server-Sent Events.
+- Does not poll the database.
+- Shows Inbox, Outbox, Deferred Work, and live Events.
+- Uses the SquirrelBox logo palette.
+- Is closed by default: root user, ASP.NET Core auth, or custom auth must be configured.
+
+ASP.NET Core auth mode:
+
+```csharp
+services.AddSquirrelBoxDashboard(options =>
+{
+    options.Authentication.Mode = SquirrelBoxDashboardAuthenticationMode.AspNetCoreAuthentication;
+});
+
+app.MapSquirrelBoxDashboard("/squirrelbox")
+   .RequireAuthorization("SquirrelBoxDashboard");
+```
+
+Custom auth mode:
+
+```csharp
+services.AddSingleton<ISquirrelBoxDashboardAuthenticator, MyDashboardAuthenticator>();
+services.AddSquirrelBoxDashboard(options =>
+{
+    options.Authentication.Mode = SquirrelBoxDashboardAuthenticationMode.Custom;
 });
 ```
 
-When `UseSquirrelBox()` wraps the endpoint, inline entries owned by the current context are completed by the middleware after the HTTP response has been written to the capture buffer. Declared operations can also own completion when they open the inbox themselves.
-
 ## Messaging
 
-Use the neutral messaging adapter when building a transport adapter or orchestration layer:
+Use `SquirrelBox.Messaging` when building a transport adapter or orchestration layer:
 
 ```csharp
-using SquirrelBox.Messaging;
-
-services.AddSquirrelBoxMessaging(options =>
-{
-    options.IdempotencyKeyMetadataNames.Add("my-idempotency-key");
-});
-
 var result = await messages.OpenAsync(new InboxMessageContext
 {
     Transport = "rabbitmq",
@@ -246,22 +320,13 @@ topic:version/subscription/operation
 
 ## Pigeon
 
-`SquirrelBox.Messaging.Pigeon` targets Pigeon 3.1.0 and uses the official consume decision and consume execution pipelines.
+`SquirrelBox.Messaging.Pigeon` targets Pigeon 3.1.0 and integrates with consume and publish interceptors.
 
 ```csharp
-using Pigeon.Messaging.Contracts;
-using SquirrelBox.Messaging.Pigeon;
-
 services.AddSquirrelBoxPigeon(options =>
 {
     options.Transport = "pigeon";
-    options.MessageIdMetadataName = "message-id";
-    options.VersionResolver = context =>
-        context.MessageVersion.Major == 0 &&
-        context.MessageVersion.Minor == 0 &&
-        context.MessageVersion.Patch == 0
-            ? SemanticVersion.Default
-            : context.MessageVersion;
+    options.EnableOutbox = true;
     options.ExecutionModeResolver = context =>
         context.Topic == "orders.deferred"
             ? InboxExecutionMode.Deferred
@@ -269,54 +334,33 @@ services.AddSquirrelBoxPigeon(options =>
 });
 ```
 
-The decision interceptor opens the inbox before the consumer handler. It maps SquirrelBox policy to Pigeon decisions:
+Consume:
 
-```text
-Continue  -> execute the consumer
-Defer     -> schedule a Mule continuation and acknowledge the broker delivery
-AckAndSkip -> duplicate already handled or in progress
-Retry     -> failed duplicate or retry policy
-Reject    -> payload conflict or rejection policy
-```
+- Decision interceptor opens the inbox before the consumer handler.
+- Execution interceptor completes or fails the inbox after the handler.
+- Deferred replay uses `IPigeonConsumerInvoker`.
 
-The execution interceptor wraps the real Pigeon handler. On success it completes the inbox entry; on exception it fails the inbox entry. Deferred replay uses `IPigeonConsumerInvoker`, so the same Pigeon consumer pipeline runs later in a new scope.
+Publish:
 
-If Pigeon does not expose a useful `MessageVersion` in the live consume context, `SquirrelBox.Messaging.Pigeon` falls back to `SemanticVersion.Default`. You can override that with `VersionResolver`. For durable replay, the adapter also stores the effective version as envelope metadata so the worker can reconstruct the same route after JSON serialization.
+- Publish decision interceptor persists a prepared Pigeon payload in SquirrelBox Outbox.
+- Pigeon publish is skipped inline after the envelope is durable.
+- Mule later publishes through Pigeon without rerunning producer interceptors.
+- Normal and raw publish flows are supported.
 
-## Mule Deferred Execution
+## Mule
 
-Inline execution is the default. Deferred execution is opt-in and pairs naturally with Mule durable actions.
+Register SquirrelBox actions with Mule:
 
 ```csharp
-using Mule;
-using Mule.InMemory;
-using SquirrelBox.Mule;
-
 services.AddSquirrelBoxMule();
 services.AddMule(mule => mule
     .UseInMemory()
     .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
+    .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 ```
 
-SquirrelBox reserves the inbox entry first. Mule receives metadata with `squirrelbox-inbox-id` and `idempotency-key`, plus a deduplication key based on the inbox entry id when you do not provide one.
-
-For HTTP endpoints that schedule declared operations, open the inbox entry with deferred mode before invoking the operation:
-
-```csharp
-var open = await http.OpenSquirrelBoxAsync(
-    inbox,
-    request,
-    executionMode: InboxExecutionMode.Deferred,
-    cancellationToken: cancellationToken);
-
-var result = await operations
-    .ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderCreated>(
-        request,
-        cancellationToken);
-```
-
-The HTTP request returns quickly after scheduling the Mule action. The Mule action later calls `IInboxService.ContinueAsync(entryId)` through the base class and owns the final inbox completion.
+SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, and `idempotency-key`.
 
 ## Sample
 
@@ -326,17 +370,13 @@ Run the sample app:
 dotnet run --project samples/SquirrelBox.Sample/SquirrelBox.Sample.csproj --urls http://127.0.0.1:5188
 ```
 
-Try these flows:
+Try:
 
 ```bash
 curl -i -X POST http://127.0.0.1:5188/orders/inline \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: inline-key-1" \
   -d "{\"customerId\":\"cust-1\",\"externalOrderId\":\"inline-1\",\"amount\":42.5}"
-
-curl -i -X POST http://127.0.0.1:5188/orders/computed-key \
-  -H "Content-Type: application/json" \
-  -d "{\"customerId\":\"cust-2\",\"externalOrderId\":\"computed-1\",\"amount\":10,\"note\":\"ignored\"}"
 
 curl -i -X POST http://127.0.0.1:5188/orders/deferred \
   -H "Content-Type: application/json" \
@@ -347,23 +387,26 @@ curl -i -X POST http://127.0.0.1:5188/pigeon/inline \
   -H "Content-Type: application/json" \
   -d "{\"orderId\":\"pigeon-inline-1\",\"customerId\":\"cust-4\",\"amount\":12.50}"
 
-curl -i -X POST http://127.0.0.1:5188/pigeon/deferred \
+curl -i -X POST http://127.0.0.1:5188/outbox/direct \
   -H "Content-Type: application/json" \
-  -d "{\"orderId\":\"pigeon-deferred-1\",\"customerId\":\"cust-5\",\"amount\":15.75}"
+  -d "{\"orderId\":\"audit-1\",\"reason\":\"manual-check\"}"
 ```
 
-## Why HTTP Does Not Hash Raw Bodies
-
-Raw body hashing is byte-level idempotency. Two equivalent JSON payloads with different property order can produce different hashes. SquirrelBox prefers semantic hashing from DTOs or explicit fingerprint profiles.
+Open the dashboard at `http://127.0.0.1:5188/squirrelbox` with `admin / secret`.
 
 ## Testing
 
 The test suite covers:
 
-- Core open/continue, duplicate states, payload conflicts, policies, fingerprints, expiration, completion, and failure.
-- In-memory storage.
-- ASP.NET Core e2e flows for explicit header response replay and computed keys.
-- Messaging e2e flows for metadata keys and computed keys.
-- Pigeon decision and execution interceptor behavior, including deferred replay through Mule.
-- Mule scheduler metadata propagation, action context rehydration, declared operation continuations, completion/failure handling, and hosted worker e2e execution.
-- EF Core SQL Server e2e flows using Docker, including concurrent duplicate reservation and ambient transaction suppression.
+- Core inbox lifecycle, policies, fingerprints, operation execution, and outbox publication.
+- In-memory inbox/outbox storage.
+- ASP.NET Core idempotency and dashboard auth/state.
+- Messaging and Pigeon consume/publish adapters.
+- Mule deferred inbox and outbox execution.
+- EF Core SQL Server e2e tests using Docker.
+
+Run everything:
+
+```bash
+dotnet test SquirrelBox.slnx -c Debug
+```
