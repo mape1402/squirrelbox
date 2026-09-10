@@ -47,6 +47,34 @@ public sealed class SquirrelBoxDashboardTests
     }
 
     [Fact]
+    public async Task Dashboard_scripts_use_mounted_path_for_client_requests()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var loginPage = await client.GetStringAsync("/squirrelbox");
+
+        Assert.Contains("${dashboardPath}/auth/login", loginPage);
+        Assert.DoesNotContain("fetch('auth/login'", loginPage);
+
+        var login = await client.PostAsJsonAsync("/squirrelbox/auth/login", new
+        {
+            username = "admin",
+            password = "secret"
+        });
+
+        login.EnsureSuccessStatusCode();
+        client.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie").Single().Split(';')[0]);
+
+        var dashboardPage = await client.GetStringAsync("/squirrelbox");
+
+        Assert.Contains("${dashboardPath}/api/state", dashboardPage);
+        Assert.Contains("${dashboardPath}/events/stream", dashboardPage);
+        Assert.DoesNotContain("fetch('api/state'", dashboardPage);
+        Assert.DoesNotContain("new EventSource('events/stream'", dashboardPage);
+    }
+
+    [Fact]
     public void Dashboard_requires_root_user_configuration_by_default()
     {
         var builder = new WebHostBuilder()

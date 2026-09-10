@@ -34,10 +34,11 @@ internal static class SquirrelBoxDashboardHtml
     </form>
   </main>
   <script>
+    const dashboardPath = location.pathname.replace(/\/$/, '');
     document.getElementById('login').addEventListener('submit', async event => {
       event.preventDefault();
       const body = Object.fromEntries(new FormData(event.currentTarget).entries());
-      const response = await fetch('auth/login', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
+      const response = await fetch(`${dashboardPath}/auth/login`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
       if (response.ok) location.reload();
       else document.getElementById('error').style.display = 'block';
     });
@@ -125,8 +126,9 @@ internal static class SquirrelBoxDashboardHtml
       btn.classList.add('active'); $(btn.dataset.tab).classList.add('active'); state.tab = btn.dataset.tab;
     }));
     $('search').addEventListener('input', render); $('status').addEventListener('change', render);
-    fetch('api/state').then(r => r.json()).then(data => { state.inbox=data.inbox||[]; state.outbox=data.outbox||[]; state.events=data.events||[]; render(); });
-    const stream = new EventSource('events/stream');
+    const dashboardPath = location.pathname.replace(/\/$/, '');
+    fetch(`${dashboardPath}/api/state`).then(r => r.json()).then(data => { state.inbox=data.inbox||[]; state.outbox=data.outbox||[]; state.events=data.events||[]; render(); });
+    const stream = new EventSource(`${dashboardPath}/events/stream`);
     stream.addEventListener('squirrelbox', e => { state.events.push(JSON.parse(e.data)); state.events = state.events.slice(-300); render(); });
     stream.onerror = () => $('liveText').textContent = 'Reconnecting';
     stream.onopen = () => $('liveText').textContent = 'Live';
