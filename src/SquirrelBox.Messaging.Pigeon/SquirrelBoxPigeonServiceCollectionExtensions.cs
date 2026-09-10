@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Pigeon.Messaging.Consuming.Dispatching;
+using Pigeon.Messaging.Producing;
 using SquirrelBox.Messaging;
 using SquirrelBox.Mule;
 
@@ -33,6 +34,8 @@ public static class SquirrelBoxPigeonServiceCollectionExtensions
 
         services.TryAddEnumerable(ServiceDescriptor.Scoped<IConsumeDecisionInterceptor, SquirrelBoxPigeonDecisionInterceptor>());
         services.TryAddEnumerable(ServiceDescriptor.Scoped<IConsumeExecutionInterceptor, SquirrelBoxPigeonExecutionInterceptor>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IPublishDecisionInterceptor, SquirrelBoxPigeonOutboxInterceptor>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IOutboxTransportPublisher, SquirrelBoxPigeonOutboxPublisher>());
         return services;
     }
 }

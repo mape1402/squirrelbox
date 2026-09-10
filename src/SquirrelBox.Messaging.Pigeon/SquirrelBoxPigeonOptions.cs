@@ -1,5 +1,6 @@
 using Pigeon.Messaging.Consuming.Dispatching;
 using Pigeon.Messaging.Contracts;
+using Pigeon.Messaging.Producing;
 
 namespace SquirrelBox.Messaging.Pigeon;
 
@@ -32,6 +33,16 @@ public sealed class SquirrelBoxPigeonOptions
     /// Gets or sets an optional execution mode resolver for Pigeon consume contexts.
     /// </summary>
     public Func<ConsumeContext, InboxExecutionMode?> ExecutionModeResolver { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether Pigeon publish operations should be persisted through SquirrelBox outbox.
+    /// </summary>
+    public bool EnableOutbox { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional predicate used to decide whether a publish operation should use SquirrelBox outbox.
+    /// </summary>
+    public Func<PublishContext, bool> OutboxPredicate { get; set; }
 
     /// <summary>
     /// Gets or sets the decision returned when a matching inbox entry is already in progress.
