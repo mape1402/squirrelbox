@@ -8,6 +8,7 @@ using Pigeon.Messaging.InMemory;
 using Pigeon.Messaging.Producing;
 using SquirrelBox;
 using SquirrelBox.AspNetCore;
+using SquirrelBox.AspNetCore.Dashboard;
 using SquirrelBox.InMemory;
 using SquirrelBox.Messaging.Pigeon;
 using SquirrelBox.Mule;
@@ -20,6 +21,8 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 });
 
 builder.Services.AddSingleton<SampleOrderStore>();
+builder.Services.AddSingleton<SampleOutboxPublisher>();
+builder.Services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<SampleOutboxPublisher>());
 builder.Services.Configure<MuleSettings>(settings =>
 {
     settings.DispatchInterval = TimeSpan.FromMilliseconds(100);
@@ -48,6 +51,7 @@ builder.Services.AddSquirrelBoxMule();
 builder.Services.AddMule(mule => mule
     .UseInMemory()
     .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
+    .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 
 var pigeon = builder.Services.AddPigeon(builder.Configuration, settings =>
@@ -62,10 +66,17 @@ var pigeon = builder.Services.AddPigeon(builder.Configuration, settings =>
 
 builder.Services.AddSquirrelBoxPigeon(options =>
 {
+    options.EnableOutbox = true;
     options.ExecutionModeResolver = context =>
         string.Equals(context.Topic, SamplePigeonRoutes.DeferredTopic, StringComparison.OrdinalIgnoreCase)
             ? InboxExecutionMode.Deferred
             : InboxExecutionMode.Inline;
+});
+
+builder.Services.AddSquirrelBoxDashboard(options =>
+{
+    options.Authentication.RootUser.Username = "admin";
+    options.Authentication.RootUser.Password = "secret";
 });
 
 pigeon.AddConsumeHandler<OrderMessage>(
@@ -93,6 +104,7 @@ pigeon.AddConsumeHandler<OrderMessage>(
 var app = builder.Build();
 
 app.UseSquirrelBox();
+app.MapSquirrelBoxDashboard("/squirrelbox");
 
 app.MapGet("/", () => Results.Ok(new
 {
@@ -104,8 +116,11 @@ app.MapGet("/", () => Results.Ok(new
         "POST /orders/deferred schedules the declared operation through Mule.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
+        "POST /outbox/direct enqueues transport-agnostic sample outbox work.",
         "GET /orders shows order state.",
-        "GET /inbox/{entryId} shows inbox state."
+        "GET /orders/audits shows sample outbox audit state.",
+        "GET /inbox/{entryId} shows inbox state.",
+        "GET /squirrelbox opens the live dashboard. Login with admin / secret."
     }
 }));
 
@@ -174,8 +189,28 @@ app.MapPost("/pigeon/deferred", async (
     return Results.Accepted($"/orders/{message.OrderId}", new { message.OrderId, topic = SamplePigeonRoutes.DeferredTopic });
 });
 
+app.MapPost("/outbox/direct", async (
+    OrderAuditMessage message,
+    IOutboxService outbox,
+    CancellationToken cancellationToken) =>
+{
+    var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
+    {
+        Transport = SampleOutboxPublisher.TransportName,
+        Operation = "orders.audit",
+        Destination = "sample-audit",
+        Payload = message,
+        CorrelationId = message.OrderId
+    }, cancellationToken);
+
+    return Results.Accepted($"/outbox/{envelope.Id}", new { outboxId = envelope.Id.ToString() });
+});
+
 app.MapGet("/orders", (SampleOrderStore orders)
     => Results.Ok(orders.List()));
+
+app.MapGet("/orders/audits", (SampleOrderStore orders)
+    => Results.Ok(orders.ListAudits()));
 
 app.MapGet("/orders/{id}", (string id, SampleOrderStore orders)
     => orders.TryGet(id, out var order)
@@ -204,6 +239,29 @@ app.MapGet("/inbox/{entryId}", async (
         entry.CompletedOnUtc,
         entry.Failure,
         entry.Completion?.Metadata
+    });
+});
+
+app.MapGet("/outbox/{envelopeId}", async (
+    string envelopeId,
+    IOutboxService outbox,
+    CancellationToken cancellationToken) =>
+{
+    if (!Ulid.TryParse(envelopeId, out var ulid))
+        return Results.BadRequest(new { message = "envelopeId must be a ULID." });
+
+    var envelope = await outbox.GetAsync(ulid, cancellationToken);
+    return Results.Ok(new
+    {
+        id = envelope.Id.ToString(),
+        envelope.Transport,
+        envelope.Operation,
+        envelope.Destination,
+        status = envelope.Status.ToString(),
+        envelope.CorrelationId,
+        envelope.CreatedOnUtc,
+        envelope.PublishedOnUtc,
+        failure = envelope.Failure?.Details
     });
 });
 
@@ -244,7 +302,7 @@ public sealed class OrderFingerprintProfile : InboxFingerprintProfile
 public sealed class CreateOrderOperation : SquirrelBoxOperation<CreateOrderRequest, OrderSnapshot>
 {
     /// <inheritdoc />
-    protected override ValueTask<OrderSnapshot> ExecuteAsync(
+    protected override async ValueTask<OrderSnapshot> ExecuteAsync(
         CreateOrderRequest request,
         SquirrelBoxOperationContext context,
         CancellationToken cancellationToken)
@@ -252,7 +310,17 @@ public sealed class CreateOrderOperation : SquirrelBoxOperation<CreateOrderReque
         var order = context.Services.GetRequiredService<SampleOrderStore>()
             .MarkCreated(request);
 
-        return ValueTask.FromResult(order);
+        await context.Services.GetRequiredService<IOutboxService>()
+            .EnqueueAsync(new OutboxEnqueueRequest
+            {
+                Transport = SampleOutboxPublisher.TransportName,
+                Operation = "orders.audit",
+                Destination = "sample-audit",
+                Payload = new OrderAuditMessage(order.Id, "created-by-http-operation"),
+                CorrelationId = context.InboxContext?.Entry.CorrelationId
+            }, cancellationToken);
+
+        return order;
     }
 }
 
@@ -278,6 +346,7 @@ public static class SamplePigeonRoutes
 public sealed class SampleOrderStore
 {
     private readonly ConcurrentDictionary<string, OrderSnapshot> _orders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentQueue<OrderAuditSnapshot> _audits = new();
 
     /// <summary>
     /// Marks an order as created by an HTTP operation.
@@ -304,6 +373,20 @@ public sealed class SampleOrderStore
         => _orders.Values.OrderBy(order => order.Id, StringComparer.OrdinalIgnoreCase).ToArray();
 
     /// <summary>
+    /// Records a sample outbox audit message.
+    /// </summary>
+    /// <param name="message">The audit message.</param>
+    public void MarkAudit(OrderAuditMessage message)
+        => _audits.Enqueue(new OrderAuditSnapshot(message.OrderId, message.Reason, DateTimeOffset.UtcNow));
+
+    /// <summary>
+    /// Lists sample outbox audit records.
+    /// </summary>
+    /// <returns>The current audit records.</returns>
+    public IReadOnlyCollection<OrderAuditSnapshot> ListAudits()
+        => _audits.ToArray();
+
+    /// <summary>
     /// Attempts to get an order by id.
     /// </summary>
     /// <param name="id">The order id.</param>
@@ -317,6 +400,44 @@ public sealed class SampleOrderStore
         var order = new OrderSnapshot(orderId, customerId, amount, status, DateTimeOffset.UtcNow);
         _orders[order.Id] = order;
         return order;
+    }
+}
+
+/// <summary>
+/// Sample outbox publisher that records audit messages in the sample store.
+/// </summary>
+public sealed class SampleOutboxPublisher : IOutboxTransportPublisher
+{
+    /// <summary>
+    /// Gets the sample transport name.
+    /// </summary>
+    public const string TransportName = "sample";
+
+    private readonly IOutboxEnvelopeSerializer _serializer;
+    private readonly SampleOrderStore _orders;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SampleOutboxPublisher"/> class.
+    /// </summary>
+    public SampleOutboxPublisher(IOutboxEnvelopeSerializer serializer, SampleOrderStore orders)
+    {
+        _serializer = serializer;
+        _orders = orders;
+    }
+
+    /// <inheritdoc />
+    public string Transport => TransportName;
+
+    /// <inheritdoc />
+    public ValueTask<OutboxPublishResult> PublishAsync(
+        OutboxEnvelope envelope,
+        CancellationToken cancellationToken = default)
+    {
+        var payloadType = Type.GetType(envelope.PayloadType, throwOnError: true)!;
+        if (_serializer.Deserialize(envelope.Payload, payloadType) is OrderAuditMessage audit)
+            _orders.MarkAudit(audit);
+
+        return ValueTask.FromResult(OutboxPublishResult.Success);
     }
 }
 
@@ -342,6 +463,13 @@ public sealed record CreateOrderRequest(
 public sealed record OrderMessage(string OrderId, string CustomerId, decimal Amount);
 
 /// <summary>
+/// Sample outbox audit message.
+/// </summary>
+/// <param name="OrderId">The order id.</param>
+/// <param name="Reason">The audit reason.</param>
+public sealed record OrderAuditMessage(string OrderId, string Reason);
+
+/// <summary>
 /// Stored sample order state.
 /// </summary>
 /// <param name="Id">The order id.</param>
@@ -355,6 +483,17 @@ public sealed record OrderSnapshot(
     decimal Amount,
     string Status,
     DateTimeOffset UpdatedOnUtc);
+
+/// <summary>
+/// Stored sample outbox audit state.
+/// </summary>
+/// <param name="OrderId">The order id.</param>
+/// <param name="Reason">The audit reason.</param>
+/// <param name="CreatedOnUtc">The audit timestamp.</param>
+public sealed record OrderAuditSnapshot(
+    string OrderId,
+    string Reason,
+    DateTimeOffset CreatedOnUtc);
 
 /// <summary>
 /// Response returned by inline order endpoints.
