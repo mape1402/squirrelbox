@@ -69,7 +69,7 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
         var login = await ReadLoginAsync(context);
 
         if (options.Authentication.Mode == SquirrelBoxDashboardAuthenticationMode.AspNetCoreAuthentication)
-            return Results.BadRequest(new { error = "Dashboard login is disabled because ASP.NET Core authentication mode is active." });
+            return Json(new { error = "Dashboard login is disabled because ASP.NET Core authentication mode is active." }, StatusCodes.Status400BadRequest);
 
         SquirrelBoxDashboardUser user = null;
 
@@ -97,14 +97,14 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
             return Results.Unauthorized();
 
         SignIn(context, user, options);
-        return Results.Json(new { authenticated = true, user = user.DisplayName ?? user.Username });
+        return Json(new { authenticated = true, user = user.DisplayName ?? user.Username });
     }
 
     private static IResult HandleLogoutAsync(HttpContext context)
     {
         var options = GetOptions(context);
         context.Response.Cookies.Delete(options.Authentication.CookieName);
-        return Results.Json(new { authenticated = false });
+        return Json(new { authenticated = false });
     }
 
     private static async Task<IResult> HandleStateAsync(HttpContext context)
@@ -130,12 +130,12 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
                 .Select(ToOutboxItem)
                 .ToArray();
 
-        return Results.Json(new
+        return Json(new
         {
             inbox,
             outbox,
             events = sink.GetRecent(limit)
-        }, JsonOptions);
+        });
     }
 
     private static async Task HandleEventStreamAsync(HttpContext context)
@@ -395,6 +395,13 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value ?? string.Empty));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
+
+    private static IResult Json(object value, int statusCode = StatusCodes.Status200OK)
+        => Results.Content(
+            JsonSerializer.Serialize(value, JsonOptions),
+            "application/json; charset=utf-8",
+            Encoding.UTF8,
+            statusCode);
 
     private sealed record LoginRequest(string Username, string Password);
 }
