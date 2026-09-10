@@ -45,12 +45,15 @@ builder.Services.AddSquirrelBoxAspNetCore(options =>
     options.RequestHeaderNames.Clear();
     options.RequestHeaderNames.Add("Idempotency-Key");
     options.ResponseHeaderName = "Idempotency-Key";
+    options.ExecutionModeResolver = context =>
+        context.Request.Path.StartsWithSegments("/orders/deferred")
+            ? InboxExecutionMode.Deferred
+            : InboxExecutionMode.Inline;
 });
 
 builder.Services.AddSquirrelBoxMule();
 builder.Services.AddMule(mule => mule
     .UseInMemory()
-    .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 
