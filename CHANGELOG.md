@@ -4,7 +4,7 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v0.1.0] - 2026-09-09
+## [v1.1.0] - 2026-09-09
 
 ### Added
 
