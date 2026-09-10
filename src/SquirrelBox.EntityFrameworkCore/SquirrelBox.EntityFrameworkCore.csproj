@@ -5,7 +5,7 @@
     <PackageId>SquirrelBox.EntityFrameworkCore</PackageId>
     <Title>SquirrelBox Entity Framework Core Provider</Title>
     <PackageType>Dependency</PackageType>
-    <Description>Entity Framework Core storage provider shell for SquirrelBox durable inbox records.</Description>
+    <Description>Entity Framework Core storage provider for SquirrelBox durable inbox and outbox records.</Description>
     <PackageTags>$(PackageTags);entity-framework-core;ef-core;persistence</PackageTags>
   </PropertyGroup>
 

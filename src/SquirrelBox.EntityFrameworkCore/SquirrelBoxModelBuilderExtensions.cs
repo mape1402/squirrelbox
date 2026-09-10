@@ -3,12 +3,12 @@ using Microsoft.EntityFrameworkCore;
 namespace SquirrelBox.EntityFrameworkCore;
 
 /// <summary>
-/// Provides Entity Framework Core model configuration for SquirrelBox.
+/// Provides advanced Entity Framework Core model configuration for SquirrelBox.
 /// </summary>
 public static class SquirrelBoxModelBuilderExtensions
 {
     /// <summary>
-    /// Adds the SquirrelBox inbox table and indexes to the model.
+    /// Adds the SquirrelBox inbox table and indexes to the model when configuring a model manually.
     /// </summary>
     /// <param name="modelBuilder">The model builder to configure.</param>
     /// <param name="tableName">The inbox table name.</param>
@@ -48,7 +48,7 @@ public static class SquirrelBoxModelBuilderExtensions
     }
 
     /// <summary>
-    /// Adds the SquirrelBox outbox table and indexes to the model.
+    /// Adds the SquirrelBox outbox table and indexes to the model when configuring a model manually.
     /// </summary>
     /// <param name="modelBuilder">The model builder to configure.</param>
     /// <param name="tableName">The outbox table name.</param>
@@ -89,7 +89,7 @@ public static class SquirrelBoxModelBuilderExtensions
     }
 
     /// <summary>
-    /// Adds both the SquirrelBox inbox and outbox tables and indexes to the model.
+    /// Adds both the SquirrelBox inbox and outbox tables and indexes to the model when configuring a model manually.
     /// </summary>
     /// <param name="modelBuilder">The model builder to configure.</param>
     /// <param name="schema">The optional table schema.</param>
