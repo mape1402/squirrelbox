@@ -17,6 +17,7 @@ public static class InMemorySquirrelBoxServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddSingleton<IInboxStore, InMemoryInboxStore>();
+        services.AddSingleton<IOutboxStore, InMemoryOutboxStore>();
         return services;
     }
 }
