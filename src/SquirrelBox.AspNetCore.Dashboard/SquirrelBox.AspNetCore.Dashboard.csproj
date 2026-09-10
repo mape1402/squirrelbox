@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>SquirrelBox.AspNetCore.Dashboard</PackageId>
+    <Title>SquirrelBox ASP.NET Core Dashboard</Title>
+    <PackageType>Dependency</PackageType>
+    <Description>Event-driven ASP.NET Core dashboard for SquirrelBox inbox, outbox, and deferred work diagnostics.</Description>
+    <PackageTags>$(PackageTags);aspnetcore;dashboard;diagnostics;outbox;events</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
+  </ItemGroup>
+
+</Project>
