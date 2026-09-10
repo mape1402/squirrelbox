@@ -38,6 +38,16 @@ public sealed class SquirrelBoxOptions
     public IList<Assembly> OperationAssemblies { get; } = [];
 
     /// <summary>
+    /// Gets the assemblies scanned for <see cref="IOutboxProfile"/> implementations.
+    /// </summary>
+    public IList<Assembly> OutboxProfileAssemblies { get; } = [];
+
+    /// <summary>
+    /// Gets the outbox options.
+    /// </summary>
+    public OutboxOptions Outbox { get; } = new();
+
+    /// <summary>
     /// Gets the policy options used to classify duplicate, conflict, and missing key outcomes.
     /// </summary>
     public InboxPolicyOptions Policies { get; } = new();
@@ -56,6 +66,9 @@ public sealed class SquirrelBoxOptions
 
         if (!OperationAssemblies.Contains(assembly))
             OperationAssemblies.Add(assembly);
+
+        if (!OutboxProfileAssemblies.Contains(assembly))
+            OutboxProfileAssemblies.Add(assembly);
 
         return this;
     }
