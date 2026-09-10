@@ -4,6 +4,20 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.0.0] - 2026-09-10
+
+### Added
+
+- Added transport-agnostic Outbox core with `IOutboxService`, `IOutboxStore`, `IOutboxTransportPublisher`, `OutboxEnvelope`, outbox profiles, JSON payload serialization, and ULID envelope identity.
+- Added InMemory and Entity Framework Core Outbox storage, including SQL Server e2e coverage and diagnostics queries.
+- Added Mule Outbox execution with `squirrelbox.outbox.publish.v1`, durable outbox envelope references, and hosted worker e2e tests.
+- Added Pigeon publish/outbox adapter that persists normal and raw Pigeon publish operations through SquirrelBox Outbox and later republishes through Pigeon.
+- Added SquirrelBox event stream contracts and in-memory event sink for live Inbox, Outbox, and Deferred Work events.
+- Added persisted Inbox diagnostics queries for dashboard history without polling.
+- Added `SquirrelBox.AspNetCore.Dashboard` with a modern event-driven dashboard, SSE live updates, root user authentication, ASP.NET Core auth mode, and custom auth adapter support.
+- Added sample scenarios for HTTP operations producing outbox work, direct outbox enqueue, Pigeon publish through SquirrelBox Outbox, and dashboard usage.
+- Added build, package, downloads, and license badges to the README.
+
 ## [v1.1.0] - 2026-09-09
 
 ### Added
