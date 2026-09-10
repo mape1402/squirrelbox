@@ -5,7 +5,7 @@ namespace SquirrelBox.InMemory;
 /// <summary>
 /// In-memory implementation of <see cref="IInboxStore"/> for tests and local scenarios.
 /// </summary>
-public sealed class InMemoryInboxStore : IInboxStore
+public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
 {
     private readonly ConcurrentDictionary<string, InboxEntry> _entriesByKey = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Ulid, InboxEntry> _entriesById = new();
@@ -104,6 +104,30 @@ public sealed class InMemoryInboxStore : IInboxStore
     /// <inheritdoc />
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => ValueTask.FromResult(GetExisting(entryId));
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<InboxEntry>> QueryAsync(
+        InboxQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        query ??= new InboxQuery();
+
+        var result = _entriesById.Values
+            .Where(entry => query.Status is null || entry.Status == query.Status)
+            .Where(entry => string.IsNullOrWhiteSpace(query.Source) ||
+                            string.Equals(entry.Source, query.Source, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => string.IsNullOrWhiteSpace(query.Operation) ||
+                            string.Equals(entry.Operation, query.Operation, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => string.IsNullOrWhiteSpace(query.IdempotencyKey) ||
+                            string.Equals(entry.IdempotencyKey, query.IdempotencyKey, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => string.IsNullOrWhiteSpace(query.CorrelationId) ||
+                            string.Equals(entry.CorrelationId, query.CorrelationId, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(entry => entry.CreatedOnUtc)
+            .Take(Math.Max(1, query.Limit))
+            .ToArray();
+
+        return ValueTask.FromResult<IReadOnlyList<InboxEntry>>(result);
+    }
 
     private static string BuildKey(InboxEntry entry)
         => string.Join(":", entry.Source, entry.Operation, entry.IdempotencyKey);

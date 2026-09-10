@@ -19,6 +19,7 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddScoped<IInboxStore, EntityFrameworkInboxStore<TDbContext>>();
+        services.AddScoped<IInboxDiagnosticsStore, EntityFrameworkInboxStore<TDbContext>>();
         return services;
     }
 

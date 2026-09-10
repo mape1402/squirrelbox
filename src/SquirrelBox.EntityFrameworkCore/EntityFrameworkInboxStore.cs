@@ -7,7 +7,7 @@ namespace SquirrelBox.EntityFrameworkCore;
 /// Entity Framework Core implementation of <see cref="IInboxStore"/>.
 /// </summary>
 /// <typeparam name="TDbContext">The DbContext type used to persist inbox entries.</typeparam>
-public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore
+public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxDiagnosticsStore
     where TDbContext : DbContext
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -109,6 +109,42 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore
     {
         await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         return ToEntry(await FindByIdAsync(dbContext, entryId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<InboxEntry>> QueryAsync(
+        InboxQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        query ??= new InboxQuery();
+
+        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var records = dbContext.Set<SquirrelBoxInboxEntryRecord>().AsNoTracking().AsQueryable();
+
+        if (query.Status is { } status)
+        {
+            var statusName = status.ToString();
+            records = records.Where(record => record.Status == statusName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Source))
+            records = records.Where(record => record.Source == query.Source);
+
+        if (!string.IsNullOrWhiteSpace(query.Operation))
+            records = records.Where(record => record.Operation == query.Operation);
+
+        if (!string.IsNullOrWhiteSpace(query.IdempotencyKey))
+            records = records.Where(record => record.IdempotencyKey == query.IdempotencyKey);
+
+        if (!string.IsNullOrWhiteSpace(query.CorrelationId))
+            records = records.Where(record => record.CorrelationId == query.CorrelationId);
+
+        var result = await records
+            .OrderByDescending(record => record.CreatedOnUtc)
+            .Take(Math.Max(1, query.Limit))
+            .ToArrayAsync(cancellationToken);
+
+        return result.Select(ToEntry).ToArray();
     }
 
     private static async Task<SquirrelBoxInboxEntryRecord> FindByBusinessKeyAsync(
