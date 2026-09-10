@@ -145,7 +145,6 @@ public sealed class DefaultOutboxService : IOutboxService
         var nextAttemptOnUtc = failedOnUtc.Add(_options.RetryDelay);
         await _store.MarkFailedAsync(envelope.Id, failure, failedOnUtc, nextAttemptOnUtc, cancellationToken);
         envelope.Status = OutboxStatus.Failed;
-        envelope.Attempts++;
         envelope.Failure = failure;
         envelope.NextAttemptOnUtc = nextAttemptOnUtc;
         envelope.UpdatedOnUtc = failedOnUtc;
