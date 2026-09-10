@@ -14,4 +14,9 @@ public static class SquirrelBoxMuleMetadata
     /// Gets the metadata key that stores the effective idempotency key.
     /// </summary>
     public const string IdempotencyKey = "idempotency-key";
+
+    /// <summary>
+    /// Gets the metadata key that stores the SquirrelBox outbox envelope ULID.
+    /// </summary>
+    public const string OutboxEnvelopeId = "squirrelbox-outbox-id";
 }
