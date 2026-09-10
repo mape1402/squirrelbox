@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace SquirrelBox.InMemory;
 
@@ -16,7 +17,9 @@ public static class InMemorySquirrelBoxServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<IInboxStore, InMemoryInboxStore>();
+        services.TryAddSingleton<InMemoryInboxStore>();
+        services.AddSingleton<IInboxStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
+        services.AddSingleton<IInboxDiagnosticsStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
         services.AddSingleton<IOutboxStore, InMemoryOutboxStore>();
         return services;
     }
