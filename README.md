@@ -57,7 +57,6 @@ services
 services.AddSquirrelBoxMule();
 services.AddMule(mule => mule
     .UseInMemory()
-    .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
 ```
 
@@ -355,7 +354,6 @@ Register SquirrelBox actions with Mule:
 services.AddSquirrelBoxMule();
 services.AddMule(mule => mule
     .UseInMemory()
-    .AddActionsFromAssemblyContaining<SquirrelBoxOperationMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 ```
