@@ -28,8 +28,15 @@ public static class SquirrelBoxServiceCollectionExtensions
         services.TryAddSingleton<IInboxTransactionRunner, SuppressAmbientTransactionInboxRunner>();
         services.TryAddSingleton<IInboxPolicyResolver, DefaultInboxPolicyResolver>();
         services.TryAddSingleton<ISquirrelBoxOperationRegistry, DefaultSquirrelBoxOperationRegistry>();
+        services.TryAddSingleton<IOutboxContextAccessor, AsyncLocalOutboxContextAccessor>();
+        services.TryAddSingleton<IOutboxEnvelopeSerializer, JsonOutboxEnvelopeSerializer>();
+        services.TryAddSingleton<IOutboxProfileRegistry, DefaultOutboxProfileRegistry>();
+        services.TryAddSingleton<ISquirrelBoxEventSink, InMemorySquirrelBoxEventSink>();
+        services.TryAddSingleton<ISquirrelBoxEventPublisher>(provider => provider.GetRequiredService<ISquirrelBoxEventSink>());
+        services.TryAddSingleton<ISquirrelBoxEventSubscriber>(provider => provider.GetRequiredService<ISquirrelBoxEventSink>());
         services.AddSingleton<IInboxPayloadHasher, JsonInboxPayloadHasher>();
         services.AddScoped<IInboxService, DefaultInbox>();
+        services.AddScoped<IOutboxService, DefaultOutboxService>();
         services.AddScoped<ISquirrelBoxOperationService, DefaultSquirrelBoxOperationService>();
 
         return services;
