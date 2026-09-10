@@ -22,7 +22,16 @@ public sealed class InMemorySquirrelBoxEventSink : ISquirrelBoxEventSink
         }
 
         foreach (var subscriber in _subscribers.Values)
-            await subscriber(@event, cancellationToken);
+        {
+            try
+            {
+                await subscriber(@event, cancellationToken);
+            }
+            catch
+            {
+                // Observability subscribers must never affect inbox, outbox, or deferred execution.
+            }
+        }
     }
 
     /// <inheritdoc />

@@ -10,6 +10,7 @@ public sealed class DefaultInbox : IInboxService
     private readonly IInboxContextAccessor _contextAccessor;
     private readonly SquirrelBoxOptions _options;
     private readonly IInboxPayloadHasher _payloadHasher;
+    private readonly ISquirrelBoxEventPublisher _events;
     private readonly IInboxStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly IInboxTransactionRunner _transactionRunner;
@@ -23,6 +24,7 @@ public sealed class DefaultInbox : IInboxService
         IOptions<SquirrelBoxOptions> options,
         IInboxContextAccessor contextAccessor,
         IInboxPayloadHasher payloadHasher,
+        ISquirrelBoxEventPublisher events,
         IInboxStore store,
         TimeProvider timeProvider,
         IInboxTransactionRunner transactionRunner)
@@ -30,6 +32,7 @@ public sealed class DefaultInbox : IInboxService
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
         _payloadHasher = payloadHasher ?? throw new ArgumentNullException(nameof(payloadHasher));
+        _events = events ?? throw new ArgumentNullException(nameof(events));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _transactionRunner = transactionRunner ?? throw new ArgumentNullException(nameof(transactionRunner));
@@ -97,11 +100,16 @@ public sealed class DefaultInbox : IInboxService
 
             SetCurrent(context);
             _lastContext = context;
+            await PublishEventAsync(SquirrelBoxEventNames.InboxOpened, result.Entry, cancellationToken);
+            await PublishEventAsync(SquirrelBoxEventNames.InboxAccepted, result.Entry, cancellationToken);
             return new InboxOpenResult(InboxOpenState.Opened, context);
         }
 
         if (result.Entry is not null)
+        {
             _lastContext = new InboxContext(result.Entry, request.Owner ?? _options.DefaultOwner, false, Current);
+            await PublishEventAsync(SquirrelBoxEventNames.InboxDuplicated, result.Entry, cancellationToken);
+        }
 
         return result;
     }
@@ -168,15 +176,22 @@ public sealed class DefaultInbox : IInboxService
         CancellationToken cancellationToken = default)
     {
         var context = GetRequiredContext();
+        var completedOnUtc = _timeProvider.GetUtcNow();
+        var resolvedCompletion = completion ?? InboxCompletion.Empty;
 
         await _transactionRunner.RunAsync(
             token => _store.MarkCompletedAsync(
                 context.Entry.Id,
-                completion ?? InboxCompletion.Empty,
-                _timeProvider.GetUtcNow(),
+                resolvedCompletion,
+                completedOnUtc,
                 token),
             cancellationToken);
 
+        context.Entry.Status = InboxStatus.Completed;
+        context.Entry.Completion = resolvedCompletion;
+        context.Entry.CompletedOnUtc = completedOnUtc;
+        context.Entry.UpdatedOnUtc = completedOnUtc;
+        await PublishEventAsync(SquirrelBoxEventNames.InboxCompleted, context.Entry, cancellationToken);
         RestorePreviousContext(context);
     }
 
@@ -192,11 +207,17 @@ public sealed class DefaultInbox : IInboxService
     {
         ArgumentNullException.ThrowIfNull(failure);
         var context = GetRequiredContext();
+        var failedOnUtc = _timeProvider.GetUtcNow();
 
         await _transactionRunner.RunAsync(
-            token => _store.MarkFailedAsync(context.Entry.Id, failure, _timeProvider.GetUtcNow(), token),
+            token => _store.MarkFailedAsync(context.Entry.Id, failure, failedOnUtc, token),
             cancellationToken);
 
+        context.Entry.Status = InboxStatus.Failed;
+        context.Entry.Failure = failure.Details;
+        context.Entry.FailureDetails = failure;
+        context.Entry.UpdatedOnUtc = failedOnUtc;
+        await PublishEventAsync(SquirrelBoxEventNames.InboxFailed, context.Entry, cancellationToken);
         RestorePreviousContext(context);
     }
 
@@ -222,5 +243,27 @@ public sealed class DefaultInbox : IInboxService
     {
         _current = context;
         _contextAccessor.Current = context;
+    }
+
+    private ValueTask PublishEventAsync(
+        string name,
+        InboxEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var @event = new SquirrelBoxEvent
+        {
+            Name = name,
+            Category = "Inbox",
+            SubjectId = entry.Id.ToString(),
+            CorrelationId = entry.CorrelationId,
+            Status = entry.Status.ToString(),
+            OccurredOnUtc = _timeProvider.GetUtcNow()
+        };
+
+        @event.Metadata["source"] = entry.Source;
+        @event.Metadata["operation"] = entry.Operation;
+        @event.Metadata["idempotency-key"] = entry.IdempotencyKey;
+        @event.Metadata["execution-mode"] = entry.ExecutionMode.ToString();
+        return _events.PublishAsync(@event, cancellationToken);
     }
 }
