@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="8.0.18" />
+    <ProjectReference Include="..\..\src\SquirrelBox.AspNetCore.Dashboard\SquirrelBox.AspNetCore.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.AspNetCore\SquirrelBox.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.InMemory\SquirrelBox.InMemory.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox\SquirrelBox.csproj" />

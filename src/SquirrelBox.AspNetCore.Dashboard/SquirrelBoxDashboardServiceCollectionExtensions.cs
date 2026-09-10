@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace SquirrelBox.AspNetCore.Dashboard;
 
@@ -26,6 +27,7 @@ public static class SquirrelBoxDashboardServiceCollectionExtensions
             services.Configure(configure);
 
         services.AddHttpContextAccessor();
+        services.AddDataProtection();
         services.TryAddScoped<ISquirrelBoxDashboardUserAccessor, SquirrelBoxDashboardUserAccessor>();
         return services;
     }
