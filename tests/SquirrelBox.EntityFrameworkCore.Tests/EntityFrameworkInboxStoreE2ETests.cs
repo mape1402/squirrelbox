@@ -16,14 +16,24 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         var provider = CreateProvider(connectionString);
         await EnsureDatabaseAsync(provider);
         var executions = 0;
+        var firstOpened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
-        var second = RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(provider, () => Interlocked.Increment(ref executions)));
+        var first = RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(
+            provider,
+            () => Interlocked.Increment(ref executions),
+            firstOpened,
+            releaseFirst.Task));
+        await firstOpened.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        var results = await Task.WhenAll(first, second);
-        var accepted = results.Single(result => result.State == InboxOpenState.Opened);
-        var duplicate = results.Single(result => result.State == InboxOpenState.DuplicateInProgress);
+        var duplicate = await RunWithoutAmbientContextAsync(() => ExecuteProtectedWorkAsync(
+            provider,
+            () => Interlocked.Increment(ref executions)));
+        releaseFirst.SetResult();
+        var accepted = await first;
 
+        Assert.Equal(InboxOpenState.Opened, accepted.State);
+        Assert.Equal(InboxOpenState.DuplicateInProgress, duplicate.State);
         Assert.Equal(1, executions);
         Assert.NotEqual(default, accepted.Entry.Id);
         Assert.Equal(accepted.EffectiveIdempotencyKey, duplicate.EffectiveIdempotencyKey);
@@ -63,7 +73,11 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.Equal(InboxStatus.Started, stored.Status);
     }
 
-    private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(ServiceProvider provider, Action execute)
+    private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
+        ServiceProvider provider,
+        Action execute,
+        TaskCompletionSource openedSignal = null,
+        Task release = null)
     {
         using var scope = provider.CreateScope();
         var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
@@ -76,7 +90,12 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         if (result.State == InboxOpenState.Opened)
         {
             execute();
-            await Task.Delay(250);
+            openedSignal?.SetResult();
+            if (release is null)
+                await Task.Delay(250);
+            else
+                await release;
+
             await inbox.CompleteCurrentAsync();
         }
 

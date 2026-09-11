@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="2.0.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="2.0.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.0.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.0.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="2.0.0" />
+<PackageReference Include="SquirrelBox" Version="2.1.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="2.1.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.1.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.1.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="2.1.0" />
 ```
 
 ## Getting Started
