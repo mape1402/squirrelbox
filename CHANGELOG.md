@@ -4,6 +4,20 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.1.0] - 2026-09-11
+
+### Changed
+
+- Updated `SquirrelBox.Messaging.Pigeon` to Pigeon 4.0.0.
+- Changed the Pigeon outbox integration to persist Pigeon's prepared `PigeonPublishEnvelope` through `IPigeonPublishEnvelopeFactory`.
+- Changed Pigeon outbox replay to publish through `IPigeonPublisherInvoker`, avoiding producer interceptor reruns and reflection-based replay.
+- Updated the sample app and README to document the Pigeon 4 outbox flow.
+
+### Fixed
+
+- Kept replay compatibility for legacy `SquirrelBoxPigeonOutboxPayload` envelopes while routing them through the Pigeon 4 publisher invoker.
+- Removed obsolete manual Pigeon publish payload reconstruction from the adapter.
+
 ## [v2.0.0] - 2026-09-10
 
 ### Added
@@ -11,7 +25,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Added transport-agnostic Outbox core with `IOutboxService`, `IOutboxStore`, `IOutboxTransportPublisher`, `OutboxEnvelope`, outbox profiles, JSON payload serialization, and ULID envelope identity.
 - Added InMemory and Entity Framework Core Outbox storage, including SQL Server e2e coverage and diagnostics queries.
 - Added Mule Outbox execution with `squirrelbox.outbox.publish.v1`, durable outbox envelope references, and hosted worker e2e tests.
-- Added Pigeon 4 publish/outbox adapter that persists normal and raw `PigeonPublishEnvelope` operations through SquirrelBox Outbox and later republishes through `IPigeonPublisherInvoker`.
+- Added Pigeon publish/outbox adapter that persists normal and raw Pigeon publish operations through SquirrelBox Outbox and later republishes through Pigeon.
 - Added SquirrelBox event stream contracts and in-memory event sink for live Inbox, Outbox, and Deferred Work events.
 - Added persisted Inbox diagnostics queries for dashboard history without polling.
 - Added `SquirrelBox.AspNetCore.Dashboard` with a modern event-driven dashboard, SSE live updates, root user authentication, ASP.NET Core auth mode, and custom auth adapter support.
