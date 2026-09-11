@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+    <PackageReference Include="Pigeon.Messaging" Version="4.0.0" />
     <ProjectReference Include="..\..\src\SquirrelBox.InMemory\SquirrelBox.InMemory.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.Messaging\SquirrelBox.Messaging.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.Messaging.Pigeon\SquirrelBox.Messaging.Pigeon.csproj" />

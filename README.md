@@ -319,7 +319,7 @@ topic:version/subscription/operation
 
 ## Pigeon
 
-`SquirrelBox.Messaging.Pigeon` targets Pigeon 3.1.0 and integrates with consume and publish interceptors.
+`SquirrelBox.Messaging.Pigeon` targets Pigeon 4.0.0 and integrates with consume and publish interceptors.
 
 ```csharp
 services.AddSquirrelBoxPigeon(options =>
@@ -341,9 +341,9 @@ Consume:
 
 Publish:
 
-- Publish decision interceptor persists a prepared Pigeon payload in SquirrelBox Outbox.
+- Publish decision interceptor persists Pigeon's prepared `PigeonPublishEnvelope` in SquirrelBox Outbox.
 - Pigeon publish is skipped inline after the envelope is durable.
-- Mule later publishes through Pigeon without rerunning producer interceptors.
+- Mule later publishes through `IPigeonPublisherInvoker` without rerunning producer interceptors, publish decision interceptors, or Pigeon's internal outbox logic.
 - Normal and raw publish flows are supported.
 
 ## Mule
