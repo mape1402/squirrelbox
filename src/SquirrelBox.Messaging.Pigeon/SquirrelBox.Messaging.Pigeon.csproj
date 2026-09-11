@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Pigeon.Messaging" Version="3.1.0" />
+    <PackageReference Include="Pigeon.Messaging" Version="4.0.0" />
     <ProjectReference Include="..\SquirrelBox.Messaging\SquirrelBox.Messaging.csproj" />
     <ProjectReference Include="..\SquirrelBox.Mule\SquirrelBox.Mule.csproj" />
     <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />

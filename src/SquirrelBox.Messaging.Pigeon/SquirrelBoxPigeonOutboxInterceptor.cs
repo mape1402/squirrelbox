@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Options;
-using Pigeon.Messaging;
-using Pigeon.Messaging.Contracts;
 using Pigeon.Messaging.Producing;
 
 namespace SquirrelBox.Messaging.Pigeon;
@@ -11,8 +9,7 @@ namespace SquirrelBox.Messaging.Pigeon;
 public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterceptor
 {
     private readonly IOutboxService _outbox;
-    private readonly ISerializer _serializer;
-    private readonly GlobalSettings _settings;
+    private readonly IPigeonPublishEnvelopeFactory _envelopeFactory;
     private readonly SquirrelBoxPigeonOptions _options;
 
     /// <summary>
@@ -20,13 +17,11 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
     /// </summary>
     public SquirrelBoxPigeonOutboxInterceptor(
         IOutboxService outbox,
-        ISerializer serializer,
-        IOptions<GlobalSettings> settings,
+        IPigeonPublishEnvelopeFactory envelopeFactory,
         IOptions<SquirrelBoxPigeonOptions> options)
     {
         _outbox = outbox ?? throw new ArgumentNullException(nameof(outbox));
-        _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
-        _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings));
+        _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
@@ -43,11 +38,8 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
             return PigeonPublishDecisionResult.Continue;
         }
 
-        var payload = context.IsRaw
-            ? CreateRawPayload(context)
-            : CreateWrappedPayload(context);
-
-        var envelope = await _outbox.EnqueueAsync(CreateRequest(context, payload), cancellationToken);
+        var publishEnvelope = await _envelopeFactory.CreateAsync(context, cancellationToken);
+        var envelope = await _outbox.EnqueueAsync(CreateRequest(publishEnvelope), cancellationToken);
 
         return new PigeonPublishDecisionResult(
             PigeonPublishDecision.Skip,
@@ -60,72 +52,52 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
         };
     }
 
-    private OutboxEnqueueRequest CreateRequest(
-        PublishContext context,
-        SquirrelBoxPigeonOutboxPayload payload)
+    private OutboxEnqueueRequest CreateRequest(PigeonPublishEnvelope envelope)
     {
         var request = new OutboxEnqueueRequest
         {
             Transport = _options.Transport,
-            Operation = context.IsRaw ? "pigeon.publish.raw" : "pigeon.publish",
-            Destination = ResolveDestination(context.Route),
-            Payload = payload,
-            PayloadType = typeof(SquirrelBoxPigeonOutboxPayload)
+            Operation = envelope.IsRaw ? "pigeon.publish.raw" : "pigeon.publish",
+            Destination = ResolveDestination(envelope),
+            Payload = envelope,
+            PayloadType = typeof(PigeonPublishEnvelope),
+            CorrelationId = envelope.CorrelationId,
+            TraceId = envelope.TraceId
         };
 
-        request.Metadata[SquirrelBoxPigeonMetadataNames.Topic] = payload.Topic;
-        request.Metadata[SquirrelBoxPigeonMetadataNames.Exchange] = payload.Exchange;
-        request.Metadata[SquirrelBoxPigeonMetadataNames.RoutingKey] = payload.RoutingKey;
-        request.Metadata[SquirrelBoxPigeonMetadataNames.PayloadType] = payload.PayloadType;
-        request.Metadata[SquirrelBoxPigeonMetadataNames.IsRaw] = payload.IsRaw.ToString();
-        request.Metadata[SquirrelBoxPigeonMetadataNames.Version] = context.Version.ToString();
+        Copy(envelope.Headers, request.Headers);
+        Copy(envelope.Metadata, request.Metadata);
+
+        request.Metadata[SquirrelBoxPigeonMetadataNames.Transport] = envelope.Transport;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.Topic] = envelope.Topic;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.Exchange] = envelope.Exchange;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.RoutingKey] = envelope.RoutingKey;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.PayloadType] = envelope.PayloadType;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.ContentType] = envelope.ContentType;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.IsRaw] = envelope.IsRaw.ToString();
+        request.Metadata[SquirrelBoxPigeonMetadataNames.Version] = envelope.Version;
+        request.Metadata[SquirrelBoxPigeonMetadataNames.Operation] = envelope.Operation;
 
         return request;
     }
 
-    private SquirrelBoxPigeonOutboxPayload CreateRawPayload(PublishContext context)
-        => new()
-        {
-            Payload = _serializer.Serialize(context.Message),
-            PayloadType = context.MessageType.AssemblyQualifiedName,
-            IsRaw = true,
-            Topic = context.Route.Topic,
-            Exchange = context.Route.Exchange,
-            RoutingKey = context.Route.RoutingKey
-        };
-
-    private SquirrelBoxPigeonOutboxPayload CreateWrappedPayload(PublishContext context)
+    private static void Copy(IReadOnlyDictionary<string, string> source, IDictionary<string, string> target)
     {
-        var wrappedType = typeof(WrappedPayload<>).MakeGenericType(context.MessageType);
-        var wrappedPayload = Activator.CreateInstance(wrappedType);
+        if (source is null)
+            return;
 
-        wrappedType.GetProperty(nameof(WrappedPayload<object>.CreatedOnUtc))!
-            .SetValue(wrappedPayload, DateTimeOffset.UtcNow);
-        wrappedType.GetProperty(nameof(WrappedPayload<object>.Message))!
-            .SetValue(wrappedPayload, context.Message);
-        wrappedType.GetProperty(nameof(WrappedPayload<object>.MessageVersion))!
-            .SetValue(wrappedPayload, context.Version);
-        wrappedType.GetProperty(nameof(WrappedPayload<object>.Metadata))!
-            .SetValue(wrappedPayload, SquirrelBoxPigeonPublishContextMetadata.Read(context));
-        wrappedType.GetProperty(nameof(WrappedPayload<object>.Domain))!
-            .SetValue(wrappedPayload, _settings.Domain);
-
-        return new SquirrelBoxPigeonOutboxPayload
-        {
-            Payload = _serializer.Serialize(wrappedPayload),
-            PayloadType = wrappedType.AssemblyQualifiedName,
-            IsRaw = false,
-            Topic = context.Route.Topic,
-            Exchange = context.Route.Exchange,
-            RoutingKey = context.Route.RoutingKey
-        };
+        foreach (var item in source)
+            target[item.Key] = item.Value;
     }
 
-    private static string ResolveDestination(PublishingRoute route)
+    private static string ResolveDestination(PigeonPublishEnvelope envelope)
     {
-        if (!string.IsNullOrWhiteSpace(route.Exchange))
-            return $"{route.Exchange}:{route.RoutingKey}";
+        if (!string.IsNullOrWhiteSpace(envelope.Destination))
+            return envelope.Destination;
 
-        return route.Topic;
+        if (!string.IsNullOrWhiteSpace(envelope.Exchange))
+            return $"{envelope.Exchange}:{envelope.RoutingKey}";
+
+        return envelope.Topic;
     }
 }

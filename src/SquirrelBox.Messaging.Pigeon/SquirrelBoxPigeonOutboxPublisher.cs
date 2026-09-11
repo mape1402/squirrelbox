@@ -1,9 +1,6 @@
-using System.Reflection;
+using System.Text;
 using Microsoft.Extensions.Options;
-using Pigeon.Messaging;
-using Pigeon.Messaging.Contracts;
 using Pigeon.Messaging.Producing;
-using Pigeon.Messaging.Producing.Management;
 
 namespace SquirrelBox.Messaging.Pigeon;
 
@@ -12,23 +9,20 @@ namespace SquirrelBox.Messaging.Pigeon;
 /// </summary>
 public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
 {
-    private readonly IProducingManager _producingManager;
+    private readonly IPigeonPublisherInvoker _publisherInvoker;
     private readonly IOutboxEnvelopeSerializer _outboxSerializer;
-    private readonly ISerializer _pigeonSerializer;
     private readonly SquirrelBoxPigeonOptions _options;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SquirrelBoxPigeonOutboxPublisher"/> class.
     /// </summary>
     public SquirrelBoxPigeonOutboxPublisher(
-        IProducingManager producingManager,
+        IPigeonPublisherInvoker publisherInvoker,
         IOutboxEnvelopeSerializer outboxSerializer,
-        ISerializer pigeonSerializer,
         IOptions<SquirrelBoxPigeonOptions> options)
     {
-        _producingManager = producingManager ?? throw new ArgumentNullException(nameof(producingManager));
+        _publisherInvoker = publisherInvoker ?? throw new ArgumentNullException(nameof(publisherInvoker));
         _outboxSerializer = outboxSerializer ?? throw new ArgumentNullException(nameof(outboxSerializer));
-        _pigeonSerializer = pigeonSerializer ?? throw new ArgumentNullException(nameof(pigeonSerializer));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
@@ -42,51 +36,64 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var payload = (SquirrelBoxPigeonOutboxPayload)_outboxSerializer.Deserialize(
-            envelope.Payload,
-            typeof(SquirrelBoxPigeonOutboxPayload));
-
-        var payloadType = ResolveType(payload.PayloadType);
-        var message = _pigeonSerializer.Deserialize(payload.Payload, payloadType);
-        var route = !string.IsNullOrWhiteSpace(payload.Exchange)
-            ? PublishingRoute.ForExchange(payload.Exchange, payload.RoutingKey)
-            : PublishingRoute.ForTopic(payload.Topic);
-
-        if (payload.IsRaw)
-        {
-            await InvokeGenericPushAsync(nameof(IProducingManager.PushRawAsync), payloadType, message, route, cancellationToken);
-            return OutboxPublishResult.Success;
-        }
-
-        var messageType = payloadType.GetGenericArguments().Single();
-        await InvokeGenericPushAsync(nameof(IProducingManager.PushAsync), messageType, message, route, cancellationToken);
+        var publishEnvelope = DeserializePublishEnvelope(envelope);
+        await _publisherInvoker.PublishAsync(publishEnvelope, cancellationToken);
         return OutboxPublishResult.Success;
     }
 
-    private async ValueTask InvokeGenericPushAsync(
-        string methodName,
-        Type genericType,
-        object payload,
-        PublishingRoute route,
-        CancellationToken cancellationToken)
+    private PigeonPublishEnvelope DeserializePublishEnvelope(OutboxEnvelope envelope)
     {
-        var method = typeof(IProducingManager)
-            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Single(method =>
-                method.Name == methodName &&
-                method.IsGenericMethodDefinition &&
-                method.GetParameters().Length == 3 &&
-                method.GetParameters()[1].ParameterType == typeof(PublishingRoute));
+        var payloadType = ResolveType(envelope.PayloadType);
 
-        var result = method
-            .MakeGenericMethod(genericType)
-            .Invoke(_producingManager, new[] { payload, route, cancellationToken });
+        if (payloadType == typeof(PigeonPublishEnvelope))
+        {
+            return (PigeonPublishEnvelope)_outboxSerializer.Deserialize(
+                envelope.Payload,
+                typeof(PigeonPublishEnvelope));
+        }
 
-        await (ValueTask)result;
+        if (payloadType == typeof(SquirrelBoxPigeonOutboxPayload))
+        {
+            var legacyPayload = (SquirrelBoxPigeonOutboxPayload)_outboxSerializer.Deserialize(
+                envelope.Payload,
+                typeof(SquirrelBoxPigeonOutboxPayload));
+
+            return CreateLegacyEnvelope(envelope, legacyPayload);
+        }
+
+        throw new InvalidOperationException(
+            $"SquirrelBox Pigeon outbox envelope payload type '{envelope.PayloadType}' is not supported.");
     }
 
     private static Type ResolveType(string typeName)
         => !string.IsNullOrWhiteSpace(typeName) && Type.GetType(typeName) is { } type
             ? type
             : throw new InvalidOperationException($"Pigeon outbox payload type '{typeName}' could not be resolved.");
+
+    private static PigeonPublishEnvelope CreateLegacyEnvelope(
+        OutboxEnvelope envelope,
+        SquirrelBoxPigeonOutboxPayload payload)
+        => new()
+        {
+            Transport = envelope.Transport,
+            Topic = payload.Topic,
+            Version = ResolveMetadata(envelope, SquirrelBoxPigeonMetadataNames.Version),
+            Operation = envelope.Operation,
+            Destination = envelope.Destination,
+            Exchange = payload.Exchange,
+            RoutingKey = payload.RoutingKey,
+            ContentType = envelope.ContentType,
+            Payload = Encoding.UTF8.GetBytes(payload.Payload ?? string.Empty),
+            PayloadType = payload.PayloadType,
+            Headers = new Dictionary<string, string>(envelope.Headers, StringComparer.OrdinalIgnoreCase),
+            Metadata = new Dictionary<string, string>(envelope.Metadata, StringComparer.OrdinalIgnoreCase),
+            CorrelationId = envelope.CorrelationId,
+            TraceId = envelope.TraceId,
+            IsRaw = payload.IsRaw
+        };
+
+    private static string ResolveMetadata(OutboxEnvelope envelope, string key)
+        => envelope.Metadata.TryGetValue(key, out var value)
+            ? value
+            : null;
 }
