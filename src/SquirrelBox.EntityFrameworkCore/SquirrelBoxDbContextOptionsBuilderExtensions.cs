@@ -5,7 +5,7 @@ namespace Microsoft.EntityFrameworkCore;
 
 internal static class SquirrelBoxDbContextOptionsBuilderExtensions
 {
-    public static DbContextOptionsBuilder UseSquirrelBoxModel(this DbContextOptionsBuilder optionsBuilder)
+    internal static DbContextOptionsBuilder UseSquirrelBoxModel(this DbContextOptionsBuilder optionsBuilder)
     {
         var extension = optionsBuilder.Options.FindExtension<SquirrelBoxDbContextOptionsExtension>()
             ?? new SquirrelBoxDbContextOptionsExtension();
