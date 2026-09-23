@@ -4,6 +4,14 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.2.0] - 2026-09-23
+
+### Changed
+
+- Changed storage provider registration to hang from the `AddSquirrelBox()` builder, including `.UseEntityFramework<TDbContext>()` and `.UseInMemory()`, keeping DbContext integration in dependency registration.
+- Changed the EF model builder and DbContext options hooks to internal infrastructure so applications do not configure SquirrelBox through `OnModelCreating` or standalone EF model APIs.
+- Updated the README with the builder-based storage registration flow and a short migration note for older storage registration code.
+
 ## [v2.1.0] - 2026-09-11
 
 ### Changed
@@ -12,8 +20,6 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Changed the Pigeon outbox integration to persist Pigeon's prepared `PigeonPublishEnvelope` through `IPigeonPublishEnvelopeFactory`.
 - Changed Pigeon outbox replay to publish through `IPigeonPublisherInvoker`, avoiding producer interceptor reruns and reflection-based replay.
 - Changed Entity Framework Core registration to inject the SquirrelBox model automatically through the registered `DbContextOptions`, so application `DbContext` types no longer need SquirrelBox model calls in `OnModelCreating`.
-- Changed storage provider registration to hang from the `AddSquirrelBox()` builder, including `.UseEntityFramework<TDbContext>()` and `.UseInMemory()`, keeping DbContext integration in dependency registration.
-- Changed the EF model builder configuration helpers to internal infrastructure so the package does not expose `OnModelCreating`-style setup APIs.
 - Updated the sample app and README to document the Pigeon 4 outbox flow.
 
 ### Fixed

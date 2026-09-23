@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="2.1.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="2.1.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.1.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.1.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="2.1.0" />
+<PackageReference Include="SquirrelBox" Version="2.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="2.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.2.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.2.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="2.2.0" />
 ```
 
 ## Getting Started
@@ -74,6 +74,16 @@ using SquirrelBox.InMemory;
 services
     .AddSquirrelBox()
     .UseInMemory();
+```
+
+Storage providers are intentionally exposed through `AddSquirrelBox()` instead of standalone
+`IServiceCollection` methods. If older code registered storage separately, move the provider
+call into the SquirrelBox chain:
+
+```csharp
+services
+    .AddSquirrelBox()
+    .UseEntityFramework<AppDbContext>();
 ```
 
 ## Inbox
