@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Changed the Pigeon outbox integration to persist Pigeon's prepared `PigeonPublishEnvelope` through `IPigeonPublishEnvelopeFactory`.
 - Changed Pigeon outbox replay to publish through `IPigeonPublisherInvoker`, avoiding producer interceptor reruns and reflection-based replay.
 - Changed Entity Framework Core registration to inject the SquirrelBox model automatically through the registered `DbContextOptions`, so application `DbContext` types no longer need SquirrelBox model calls in `OnModelCreating`.
+- Changed the EF model builder configuration helpers to internal infrastructure so the package does not expose `OnModelCreating`-style setup APIs.
 - Updated the sample app and README to document the Pigeon 4 outbox flow.
 
 ### Fixed

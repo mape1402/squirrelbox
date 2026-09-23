@@ -2,19 +2,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SquirrelBox.EntityFrameworkCore;
 
-/// <summary>
-/// Provides advanced Entity Framework Core model configuration for SquirrelBox.
-/// </summary>
-public static class SquirrelBoxModelBuilderExtensions
+internal static class SquirrelBoxModelBuilderExtensions
 {
-    /// <summary>
-    /// Adds the SquirrelBox inbox table and indexes to the model when configuring a model manually.
-    /// </summary>
-    /// <param name="modelBuilder">The model builder to configure.</param>
-    /// <param name="tableName">The inbox table name.</param>
-    /// <param name="schema">The optional table schema.</param>
-    /// <returns>The same model builder for fluent configuration.</returns>
-    public static ModelBuilder ApplySquirrelBoxInbox(
+    internal static ModelBuilder ApplySquirrelBoxInbox(
         this ModelBuilder modelBuilder,
         string tableName = "SquirrelBoxInboxEntries",
         string schema = null)
@@ -47,14 +37,7 @@ public static class SquirrelBoxModelBuilderExtensions
         return modelBuilder;
     }
 
-    /// <summary>
-    /// Adds the SquirrelBox outbox table and indexes to the model when configuring a model manually.
-    /// </summary>
-    /// <param name="modelBuilder">The model builder to configure.</param>
-    /// <param name="tableName">The outbox table name.</param>
-    /// <param name="schema">The optional table schema.</param>
-    /// <returns>The same model builder for fluent configuration.</returns>
-    public static ModelBuilder ApplySquirrelBoxOutbox(
+    internal static ModelBuilder ApplySquirrelBoxOutbox(
         this ModelBuilder modelBuilder,
         string tableName = "SquirrelBoxOutboxEnvelopes",
         string schema = null)
@@ -88,13 +71,7 @@ public static class SquirrelBoxModelBuilderExtensions
         return modelBuilder;
     }
 
-    /// <summary>
-    /// Adds both the SquirrelBox inbox and outbox tables and indexes to the model when configuring a model manually.
-    /// </summary>
-    /// <param name="modelBuilder">The model builder to configure.</param>
-    /// <param name="schema">The optional table schema.</param>
-    /// <returns>The same model builder for fluent configuration.</returns>
-    public static ModelBuilder ApplySquirrelBox(
+    internal static ModelBuilder ApplySquirrelBox(
         this ModelBuilder modelBuilder,
         string schema = null)
         => modelBuilder.ApplySquirrelBoxInbox(schema: schema).ApplySquirrelBoxOutbox(schema: schema);
