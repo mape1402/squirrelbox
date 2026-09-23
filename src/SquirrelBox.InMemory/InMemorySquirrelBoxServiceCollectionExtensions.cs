@@ -9,18 +9,23 @@ namespace SquirrelBox.InMemory;
 public static class InMemorySquirrelBoxServiceCollectionExtensions
 {
     /// <summary>
-    /// Uses the in-memory inbox store.
+    /// Uses in-memory inbox and outbox storage for SquirrelBox.
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <returns>The same service collection for fluent registration.</returns>
-    public static IServiceCollection UseInMemory(this IServiceCollection services)
+    /// <param name="builder">The SquirrelBox builder.</param>
+    /// <returns>The same SquirrelBox builder for fluent registration.</returns>
+    public static ISquirrelBoxBuilder UseInMemory(this ISquirrelBoxBuilder builder)
     {
-        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(builder);
 
+        AddInMemory(builder.Services);
+        return builder;
+    }
+
+    private static void AddInMemory(IServiceCollection services)
+    {
         services.TryAddSingleton<InMemoryInboxStore>();
         services.AddSingleton<IInboxStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
         services.AddSingleton<IInboxDiagnosticsStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
         services.AddSingleton<IOutboxStore, InMemoryOutboxStore>();
-        return services;
     }
 }

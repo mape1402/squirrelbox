@@ -11,7 +11,7 @@ public static class SquirrelBoxServiceCollectionExtensions
     /// <summary>
     /// Adds the SquirrelBox core services to the service collection.
     /// </summary>
-    public static IServiceCollection AddSquirrelBox(
+    public static ISquirrelBoxBuilder AddSquirrelBox(
         this IServiceCollection services,
         Action<SquirrelBoxOptions> configure = null)
     {
@@ -39,6 +39,6 @@ public static class SquirrelBoxServiceCollectionExtensions
         services.AddScoped<IOutboxService, DefaultOutboxService>();
         services.AddScoped<ISquirrelBoxOperationService, DefaultSquirrelBoxOperationService>();
 
-        return services;
+        return new SquirrelBoxBuilder(services);
     }
 }
