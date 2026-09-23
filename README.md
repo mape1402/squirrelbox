@@ -60,10 +60,21 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
 ```
 
-SquirrelBox augments the registered `AppDbContext` automatically. Your application `DbContext`
-does not need SquirrelBox `DbSet` properties or `OnModelCreating` changes.
+SquirrelBox storage providers are configured from the builder returned by `AddSquirrelBox`.
+For EF Core, call `UseEntityFramework<TDbContext>()` after registering the application
+`DbContext`. SquirrelBox augments the registered `DbContextOptions<TDbContext>`
+automatically; your application `DbContext` does not need SquirrelBox `DbSet` properties,
+`OnModelCreating` changes, or model builder calls.
 
 Use `UseInMemory()` instead of EF for tests, samples, and local development.
+
+```csharp
+using SquirrelBox.InMemory;
+
+services
+    .AddSquirrelBox()
+    .UseInMemory();
+```
 
 ## Inbox
 
