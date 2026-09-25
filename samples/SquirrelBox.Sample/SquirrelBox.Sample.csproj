@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Mule.DurableActions.InMemory" Version="1.4.1" />
+    <PackageReference Include="Mule.DurableActions.InMemory" Version="1.5.0" />
     <PackageReference Include="Pigeon.Messaging.InMemory" Version="4.0.0" />
     <ProjectReference Include="..\..\src\SquirrelBox.AspNetCore.Dashboard\SquirrelBox.AspNetCore.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\SquirrelBox.AspNetCore\SquirrelBox.AspNetCore.csproj" />
