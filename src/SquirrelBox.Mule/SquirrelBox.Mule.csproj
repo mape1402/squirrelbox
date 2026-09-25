@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Mule.DurableActions" Version="1.4.1" />
+    <PackageReference Include="Mule.DurableActions" Version="1.5.0" />
     <ProjectReference Include="..\SquirrelBox\SquirrelBox.csproj" />
   </ItemGroup>
 
