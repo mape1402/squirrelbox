@@ -4,6 +4,13 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.2.1] - 2026-09-24
+
+### Changed
+
+- Updated Mule durable action dependencies to `Mule.DurableActions` 1.5.0 and `Mule.DurableActions.InMemory` 1.5.0.
+- Updated package reference examples in the README for the patch release.
+
 ## [v2.2.0] - 2026-09-23
 
 ### Changed
