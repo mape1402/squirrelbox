@@ -18,6 +18,21 @@ public sealed class SquirrelBoxAspNetCoreOptions
     public string ResponseHeaderName { get; set; }
 
     /// <summary>
+    /// Gets the request header names inspected for correlation ids.
+    /// </summary>
+    public IList<string> CorrelationIdHeaderNames { get; } = ["Correlation-Id", "X-Correlation-Id"];
+
+    /// <summary>
+    /// Gets the request header names inspected for trace ids.
+    /// </summary>
+    public IList<string> TraceIdHeaderNames { get; } = ["Trace-Id", "X-Trace-Id", "traceparent"];
+
+    /// <summary>
+    /// Gets the response header names used for generated attempt ids.
+    /// </summary>
+    public IList<string> AttemptIdHeaderNames { get; } = ["SquirrelBox-Attempt-Id", "X-SquirrelBox-Attempt-Id"];
+
+    /// <summary>
     /// Gets the HTTP methods protected by the middleware.
     /// </summary>
     public ISet<string> ProtectedMethods { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

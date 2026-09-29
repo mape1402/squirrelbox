@@ -73,6 +73,58 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.Equal(InboxStatus.Started, stored.Status);
     }
 
+    [Fact]
+    public async Task SqlServer_store_records_attempts_and_preserves_correlation_for_duplicates()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        InboxOpenResult opened;
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var inbox = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            opened = await inbox.OpenOrContinueAsync(new InboxOpenRequest
+            {
+                Source = "http",
+                Operation = "POST /orders",
+                Payload = new TestPayload("order-attempts")
+            });
+
+            await inbox.CompleteCurrentAsync();
+        }
+        var openedIdempotencyKey = opened.EffectiveIdempotencyKey;
+        var openedCorrelationId = opened.EffectiveCorrelationId;
+        var openedAttemptId = opened.EffectiveAttemptId;
+        var openedTraceId = opened.EffectiveTraceId;
+
+        using var secondScope = provider.CreateScope();
+        var duplicate = await secondScope.ServiceProvider
+            .GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(new InboxOpenRequest
+            {
+                Source = "http",
+                Operation = "POST /orders",
+                Payload = new TestPayload("order-attempts")
+            });
+
+        using var verificationScope = provider.CreateScope();
+        var dbContext = verificationScope.ServiceProvider.GetRequiredService<TestInboxDbContext>();
+        var attempts = await dbContext.Set<SquirrelBoxInboxAttemptRecord>()
+            .Where(attempt => attempt.InboxEntryId == opened.Entry.Id.ToString())
+            .OrderBy(attempt => attempt.CreatedOnUtc)
+            .ToListAsync();
+
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.State);
+        Assert.Equal(openedIdempotencyKey, duplicate.EffectiveIdempotencyKey);
+        Assert.Equal(openedCorrelationId, duplicate.EffectiveCorrelationId);
+        Assert.NotEqual(openedAttemptId, duplicate.EffectiveAttemptId);
+        Assert.NotEqual(openedTraceId, duplicate.EffectiveTraceId);
+        Assert.Equal(2, attempts.Count);
+        Assert.Contains(attempts, attempt => attempt.AttemptId == openedAttemptId);
+        Assert.Contains(attempts, attempt => attempt.AttemptId == duplicate.EffectiveAttemptId);
+    }
+
     private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
         ServiceProvider provider,
         Action execute,
@@ -130,6 +182,7 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         var dbContext = scope.ServiceProvider.GetRequiredService<TestInboxDbContext>();
 
         Assert.NotNull(dbContext.Model.FindEntityType(typeof(SquirrelBoxInboxEntryRecord)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SquirrelBoxInboxAttemptRecord)));
         await dbContext.Database.EnsureCreatedAsync();
     }
 

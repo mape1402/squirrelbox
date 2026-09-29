@@ -21,6 +21,11 @@ public sealed class InboxOpenRequest
     public string IdempotencyKey { get; init; }
 
     /// <summary>
+    /// Gets the metadata/header name used to receive the idempotency key.
+    /// </summary>
+    public string IdempotencyKeyName { get; init; }
+
+    /// <summary>
     /// Gets the payload used for semantic hashing.
     /// </summary>
     public object Payload { get; init; }
@@ -34,6 +39,26 @@ public sealed class InboxOpenRequest
     /// Gets the correlation id.
     /// </summary>
     public string CorrelationId { get; init; }
+
+    /// <summary>
+    /// Gets the metadata/header name used to receive the correlation id.
+    /// </summary>
+    public string CorrelationIdName { get; init; }
+
+    /// <summary>
+    /// Gets the trace id for the current attempt.
+    /// </summary>
+    public string TraceId { get; init; }
+
+    /// <summary>
+    /// Gets the metadata/header name used to receive the trace id.
+    /// </summary>
+    public string TraceIdName { get; init; }
+
+    /// <summary>
+    /// Gets the metadata/header name used to propagate the generated attempt id.
+    /// </summary>
+    public string AttemptIdName { get; init; }
 
     /// <summary>
     /// Gets the component that owns the opened context.

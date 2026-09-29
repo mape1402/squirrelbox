@@ -38,7 +38,15 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
 
         await using var dbContext = _dbContextFactory.CreateDbContext();
         var record = ToRecord(entry);
+        SquirrelBoxInboxAttemptRecord attemptRecord = null;
         dbContext.Set<SquirrelBoxInboxEntryRecord>().Add(record);
+        if (entry.CurrentAttempt is not null)
+        {
+            entry.CurrentAttempt.State = InboxOpenState.Opened;
+            entry.CurrentAttempt.InboxEntryId = entry.Id;
+            attemptRecord = ToAttemptRecord(entry.CurrentAttempt);
+            dbContext.Set<SquirrelBoxInboxAttemptRecord>().Add(attemptRecord);
+        }
 
         try
         {
@@ -48,8 +56,11 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         catch (DbUpdateException)
         {
             dbContext.Entry(record).State = EntityState.Detached;
-            var existing = await FindByBusinessKeyAsync(dbContext, entry, cancellationToken);
-            return ResolveDuplicate(existing, entry);
+            if (attemptRecord is not null)
+                dbContext.Entry(attemptRecord).State = EntityState.Detached;
+
+            var existing = await FindByBusinessKeyForUpdateAsync(dbContext, entry, cancellationToken);
+            return await ResolveDuplicateAsync(dbContext, existing, entry, cancellationToken);
         }
     }
 
@@ -154,12 +165,11 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         return result.Select(ToEntry).ToArray();
     }
 
-    private static async Task<SquirrelBoxInboxEntryRecord> FindByBusinessKeyAsync(
+    private static async Task<SquirrelBoxInboxEntryRecord> FindByBusinessKeyForUpdateAsync(
         TDbContext dbContext,
         InboxEntry entry,
         CancellationToken cancellationToken)
         => await dbContext.Set<SquirrelBoxInboxEntryRecord>()
-            .AsNoTracking()
             .SingleAsync(
                 record => record.Source == entry.Source &&
                           record.Operation == entry.Operation &&
@@ -174,21 +184,45 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             .SingleOrDefaultAsync(record => record.Id == entryId.ToString(), cancellationToken)
             ?? throw new InboxEntryNotFoundException(entryId);
 
-    private static InboxOpenResult ResolveDuplicate(SquirrelBoxInboxEntryRecord existing, InboxEntry incoming)
+    private static async Task<InboxOpenResult> ResolveDuplicateAsync(
+        TDbContext dbContext,
+        SquirrelBoxInboxEntryRecord existing,
+        InboxEntry incoming,
+        CancellationToken cancellationToken)
     {
         var entry = ToEntry(existing);
+        InboxOpenState state;
 
         if (entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= incoming.CreatedOnUtc)
-            return new InboxOpenResult(InboxOpenState.Expired, entry: entry);
-
-        if (!string.IsNullOrWhiteSpace(entry.PayloadHash) &&
-            !string.IsNullOrWhiteSpace(incoming.PayloadHash) &&
-            !string.Equals(entry.PayloadHash, incoming.PayloadHash, StringComparison.Ordinal))
         {
-            return new InboxOpenResult(InboxOpenState.PayloadConflict, entry: entry);
+            state = InboxOpenState.Expired;
+        }
+        else if (!string.IsNullOrWhiteSpace(entry.PayloadHash) &&
+                 !string.IsNullOrWhiteSpace(incoming.PayloadHash) &&
+                 !string.Equals(entry.PayloadHash, incoming.PayloadHash, StringComparison.Ordinal))
+        {
+            state = InboxOpenState.PayloadConflict;
+        }
+        else
+        {
+            state = MapDuplicateState(entry);
         }
 
-        return new InboxOpenResult(MapDuplicateState(entry), entry: entry);
+        if (incoming.CurrentAttempt is not null)
+        {
+            var attempt = CloneAttempt(incoming.CurrentAttempt, entry.Id, state);
+            existing.LastAttemptId = attempt.AttemptId;
+            existing.LastTraceId = attempt.TraceId;
+            existing.UpdatedOnUtc = incoming.CreatedOnUtc;
+            dbContext.Set<SquirrelBoxInboxAttemptRecord>().Add(ToAttemptRecord(attempt));
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            entry.LastAttemptId = attempt.AttemptId;
+            entry.LastTraceId = attempt.TraceId;
+            entry.CurrentAttempt = attempt;
+        }
+
+        return new InboxOpenResult(state, entry: entry);
     }
 
     private static InboxOpenState MapDuplicateState(InboxEntry entry)
@@ -207,10 +241,17 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             Source = entry.Source,
             Operation = entry.Operation,
             IdempotencyKey = entry.IdempotencyKey,
+            IdempotencyKeyName = entry.IdempotencyKeyName,
             IdempotencyKeySource = entry.IdempotencyKeySource.ToString(),
             PayloadHash = entry.PayloadHash,
             PayloadType = entry.PayloadType,
             CorrelationId = entry.CorrelationId,
+            CorrelationIdName = entry.CorrelationIdName,
+            CorrelationIdSource = entry.CorrelationIdSource.ToString(),
+            OriginalAttemptId = entry.OriginalAttemptId,
+            OriginalTraceId = entry.OriginalTraceId,
+            LastAttemptId = entry.LastAttemptId,
+            LastTraceId = entry.LastTraceId,
             Status = entry.Status.ToString(),
             ExecutionMode = entry.ExecutionMode.ToString(),
             CreatedOnUtc = entry.CreatedOnUtc,
@@ -230,10 +271,17 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             Source = record.Source,
             Operation = record.Operation,
             IdempotencyKey = record.IdempotencyKey,
+            IdempotencyKeyName = record.IdempotencyKeyName,
             IdempotencyKeySource = Enum.Parse<InboxIdempotencyKeySource>(record.IdempotencyKeySource),
             PayloadHash = record.PayloadHash,
             PayloadType = record.PayloadType,
             CorrelationId = record.CorrelationId,
+            CorrelationIdName = record.CorrelationIdName,
+            CorrelationIdSource = ParseMetadataSource(record.CorrelationIdSource),
+            OriginalAttemptId = record.OriginalAttemptId,
+            OriginalTraceId = record.OriginalTraceId,
+            LastAttemptId = record.LastAttemptId,
+            LastTraceId = record.LastTraceId,
             Status = Enum.Parse<InboxStatus>(record.Status),
             ExecutionMode = Enum.Parse<InboxExecutionMode>(record.ExecutionMode),
             CreatedOnUtc = record.CreatedOnUtc,
@@ -245,6 +293,43 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             FailureDetails = Deserialize<InboxFailure>(record.FailureDetailsJson),
             Metadata = Deserialize<Dictionary<string, string>>(record.MetadataJson) ?? new(StringComparer.OrdinalIgnoreCase)
         };
+
+    private static SquirrelBoxInboxAttemptRecord ToAttemptRecord(InboxAttempt attempt)
+        => new()
+        {
+            Id = attempt.Id.ToString(),
+            InboxEntryId = attempt.InboxEntryId.ToString(),
+            AttemptId = attempt.AttemptId,
+            AttemptIdName = attempt.AttemptIdName,
+            AttemptIdSource = attempt.AttemptIdSource.ToString(),
+            TraceId = attempt.TraceId,
+            TraceIdName = attempt.TraceIdName,
+            TraceIdSource = attempt.TraceIdSource.ToString(),
+            State = attempt.State.ToString(),
+            CreatedOnUtc = attempt.CreatedOnUtc,
+            MetadataJson = Serialize(attempt.Metadata)
+        };
+
+    private static InboxAttempt CloneAttempt(InboxAttempt attempt, Ulid entryId, InboxOpenState state)
+        => new()
+        {
+            Id = attempt.Id == default ? Ulid.NewUlid() : attempt.Id,
+            InboxEntryId = entryId,
+            AttemptId = attempt.AttemptId,
+            AttemptIdName = attempt.AttemptIdName,
+            AttemptIdSource = attempt.AttemptIdSource,
+            TraceId = attempt.TraceId,
+            TraceIdName = attempt.TraceIdName,
+            TraceIdSource = attempt.TraceIdSource,
+            State = state,
+            CreatedOnUtc = attempt.CreatedOnUtc,
+            Metadata = new Dictionary<string, string>(attempt.Metadata, StringComparer.OrdinalIgnoreCase)
+        };
+
+    private static SquirrelBoxMetadataValueSource ParseMetadataSource(string value)
+        => string.IsNullOrWhiteSpace(value)
+            ? SquirrelBoxMetadataValueSource.Missing
+            : Enum.Parse<SquirrelBoxMetadataValueSource>(value);
 
     private static string Serialize<T>(T value)
         => value is null ? null : JsonSerializer.Serialize(value, JsonOptions);

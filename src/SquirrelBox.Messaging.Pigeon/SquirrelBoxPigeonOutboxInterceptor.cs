@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Pigeon.Messaging.Producing;
+using SquirrelBox.Messaging;
 
 namespace SquirrelBox.Messaging.Pigeon;
 
@@ -9,7 +10,9 @@ namespace SquirrelBox.Messaging.Pigeon;
 public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterceptor
 {
     private readonly IOutboxService _outbox;
+    private readonly IInboxService _inbox;
     private readonly IPigeonPublishEnvelopeFactory _envelopeFactory;
+    private readonly ISquirrelBoxMessageMetadataEnricher _metadataEnricher;
     private readonly SquirrelBoxPigeonOptions _options;
 
     /// <summary>
@@ -17,11 +20,15 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
     /// </summary>
     public SquirrelBoxPigeonOutboxInterceptor(
         IOutboxService outbox,
+        IInboxService inbox,
         IPigeonPublishEnvelopeFactory envelopeFactory,
+        ISquirrelBoxMessageMetadataEnricher metadataEnricher,
         IOptions<SquirrelBoxPigeonOptions> options)
     {
         _outbox = outbox ?? throw new ArgumentNullException(nameof(outbox));
+        _inbox = inbox ?? throw new ArgumentNullException(nameof(inbox));
         _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
+        _metadataEnricher = metadataEnricher ?? throw new ArgumentNullException(nameof(metadataEnricher));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
@@ -38,7 +45,8 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
             return PigeonPublishDecisionResult.Continue;
         }
 
-        var publishEnvelope = await _envelopeFactory.CreateAsync(context, cancellationToken);
+        var publishEnvelope = WithSquirrelBoxMetadata(
+            await _envelopeFactory.CreateAsync(context, cancellationToken));
         var envelope = await _outbox.EnqueueAsync(CreateRequest(publishEnvelope), cancellationToken);
 
         return new PigeonPublishDecisionResult(
@@ -54,6 +62,7 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
 
     private OutboxEnqueueRequest CreateRequest(PigeonPublishEnvelope envelope)
     {
+        var metadata = CreateCurrentMetadata();
         var request = new OutboxEnqueueRequest
         {
             Transport = _options.Transport,
@@ -61,12 +70,17 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
             Destination = ResolveDestination(envelope),
             Payload = envelope,
             PayloadType = typeof(PigeonPublishEnvelope),
-            CorrelationId = envelope.CorrelationId,
-            TraceId = envelope.TraceId
+            CorrelationId = string.IsNullOrWhiteSpace(envelope.CorrelationId)
+                ? metadata.CorrelationId?.Value
+                : envelope.CorrelationId,
+            TraceId = string.IsNullOrWhiteSpace(envelope.TraceId)
+                ? metadata.TraceId?.Value
+                : envelope.TraceId
         };
 
         Copy(envelope.Headers, request.Headers);
         Copy(envelope.Metadata, request.Metadata);
+        metadata.WriteTo(request.Metadata);
 
         request.Metadata[SquirrelBoxPigeonMetadataNames.Transport] = envelope.Transport;
         request.Metadata[SquirrelBoxPigeonMetadataNames.Topic] = envelope.Topic;
@@ -100,4 +114,38 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
 
         return envelope.Topic;
     }
+
+    private PigeonPublishEnvelope WithSquirrelBoxMetadata(PigeonPublishEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        var metadata = envelope.Metadata is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(envelope.Metadata, StringComparer.OrdinalIgnoreCase);
+        CreateCurrentMetadata().WriteTo(metadata);
+
+        return new PigeonPublishEnvelope
+        {
+            Transport = envelope.Transport,
+            Topic = envelope.Topic,
+            Version = envelope.Version,
+            Operation = envelope.Operation,
+            Destination = envelope.Destination,
+            Exchange = envelope.Exchange,
+            RoutingKey = envelope.RoutingKey,
+            ContentType = envelope.ContentType,
+            Payload = envelope.Payload,
+            PayloadType = envelope.PayloadType,
+            Headers = envelope.Headers is null
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(envelope.Headers, StringComparer.OrdinalIgnoreCase),
+            Metadata = metadata,
+            CorrelationId = envelope.CorrelationId,
+            TraceId = envelope.TraceId,
+            IsRaw = envelope.IsRaw
+        };
+    }
+
+    private SquirrelBoxMessageMetadata CreateCurrentMetadata()
+        => _metadataEnricher.Create(_inbox.Current?.Identity ?? _inbox.LastContext?.Identity);
 }

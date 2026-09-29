@@ -26,6 +26,7 @@ public static class SquirrelBoxMessagingServiceCollectionExtensions
             services.Configure(configure);
 
         services.TryAddScoped<IInboxMessageService, DefaultInboxMessageService>();
+        services.TryAddScoped<ISquirrelBoxMessageMetadataEnricher, DefaultSquirrelBoxMessageMetadataEnricher>();
         return services;
     }
 }

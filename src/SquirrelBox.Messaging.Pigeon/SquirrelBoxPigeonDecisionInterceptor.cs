@@ -12,6 +12,7 @@ namespace SquirrelBox.Messaging.Pigeon;
 public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInterceptor
 {
     private readonly IInboxMessageService _messages;
+    private readonly ISquirrelBoxMessageMetadataEnricher _metadataEnricher;
     private readonly IInboxMuleScheduler _scheduler;
     private readonly IInboxService _inbox;
     private readonly IPigeonConsumeEnvelopeFactory _envelopeFactory;
@@ -22,12 +23,14 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
     /// </summary>
     public SquirrelBoxPigeonDecisionInterceptor(
         IInboxMessageService messages,
+        ISquirrelBoxMessageMetadataEnricher metadataEnricher,
         IInboxMuleScheduler scheduler,
         IInboxService inbox,
         IPigeonConsumeEnvelopeFactory envelopeFactory,
         IOptions<SquirrelBoxPigeonOptions> options)
     {
         _messages = messages ?? throw new ArgumentNullException(nameof(messages));
+        _metadataEnricher = metadataEnricher ?? throw new ArgumentNullException(nameof(metadataEnricher));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _inbox = inbox ?? throw new ArgumentNullException(nameof(inbox));
         _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
@@ -43,13 +46,15 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
 
         if (context.ExecutionSource == ConsumeExecutionSource.DeferredReplay)
         {
-            _messages.AttachEffectiveKey(context.ReplyMetadata);
+            var metadata = CreateCurrentMetadata();
+            metadata.WriteTo(context.ReplyMetadata);
+            metadata.WriteTo(context.ReplyHeaders);
             return PigeonConsumeDecisionResult.Continue;
         }
 
         var messageContext = CreateMessageContext(context, out var version);
         var open = await _messages.OpenAsync(messageContext, cancellationToken);
-        AttachEffectiveKey(context, open.EffectiveIdempotencyKey);
+        AttachEffectiveMetadata(context, open.EffectiveMetadata);
 
         if (!open.ShouldExecute)
             return MapDecision(open.Decision);
@@ -58,7 +63,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
         {
             var envelope = WithVersion(_envelopeFactory.Create(context), version);
             envelope.Metadata[SquirrelBoxPigeonMetadataNames.Version] = version.ToString();
-            AttachEffectiveKey(envelope.Metadata, open.EffectiveIdempotencyKey);
+            open.EffectiveMetadata.WriteTo(envelope.Metadata);
 
             await _scheduler.EnqueueCurrentAsync(
                 SquirrelBoxPigeonMuleActionKeys.ConsumeKey,
@@ -72,7 +77,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
                 PigeonConsumeDecision.Defer,
                 "SquirrelBox scheduled the Pigeon consumer for deferred execution.")
             {
-                Metadata = CreateDecisionMetadata(open.EffectiveIdempotencyKey)
+                Metadata = CreateDecisionMetadata(open.EffectiveMetadata)
             };
         }
 
@@ -98,7 +103,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
                         context.MessageType?.Name ??
                         "message",
             MessageId = ResolveMessageId(context, metadata),
-            CorrelationId = ResolveCorrelationId(context, metadata),
+            CorrelationId = context.CorrelationId,
             ExecutionMode = _options.ExecutionModeResolver?.Invoke(context),
             Payload = context.Message,
             Metadata = metadata
@@ -159,9 +164,12 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
             pigeonDecision,
             $"SquirrelBox inbox decision '{decision.Action}' for state '{decision.State}'.")
         {
-            Metadata = CreateDecisionMetadata(decision.EffectiveIdempotencyKey)
+            Metadata = CreateDecisionMetadata(_metadataEnricher.Create(_inbox.LastContext?.Identity))
         };
     }
+
+    private SquirrelBoxMessageMetadata CreateCurrentMetadata()
+        => _metadataEnricher.Create(_inbox.Current?.Identity ?? _inbox.LastContext?.Identity);
 
     private string ResolveMessageId(ConsumeContext context, IReadOnlyDictionary<string, string> metadata)
     {
@@ -174,34 +182,17 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
             : null;
     }
 
-    private static string ResolveCorrelationId(ConsumeContext context, IReadOnlyDictionary<string, string> metadata)
-        => !string.IsNullOrWhiteSpace(context.CorrelationId)
-            ? context.CorrelationId
-            : metadata.TryGetValue("correlation-id", out var value) ||
-              metadata.TryGetValue("x-correlation-id", out value)
-                ? value
-                : null;
-
-    private static void AttachEffectiveKey(ConsumeContext context, string key)
+    private static void AttachEffectiveMetadata(ConsumeContext context, SquirrelBoxMessageMetadata metadata)
     {
-        AttachEffectiveKey(context.ReplyMetadata, key);
-        AttachEffectiveKey(context.ReplyHeaders, key);
+        metadata?.WriteTo(context.ReplyMetadata);
+        metadata?.WriteTo(context.ReplyHeaders);
     }
 
-    private static void AttachEffectiveKey(IDictionary<string, string> metadata, string key)
+    private static IReadOnlyDictionary<string, string> CreateDecisionMetadata(SquirrelBoxMessageMetadata metadata)
     {
-        if (!string.IsNullOrWhiteSpace(key))
-            metadata[SquirrelBoxMuleMetadata.IdempotencyKey] = key;
-    }
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        metadata?.WriteTo(result);
 
-    private static IReadOnlyDictionary<string, string> CreateDecisionMetadata(string key)
-    {
-        if (string.IsNullOrWhiteSpace(key))
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [SquirrelBoxMuleMetadata.IdempotencyKey] = key
-        };
+        return result;
     }
 }

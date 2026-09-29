@@ -32,6 +32,12 @@ public sealed class SquirrelBoxInboxEntryRecord
     public string IdempotencyKey { get; set; }
 
     /// <summary>
+    /// Gets or sets the metadata name used to propagate the idempotency key.
+    /// </summary>
+    [MaxLength(128)]
+    public string IdempotencyKeyName { get; set; }
+
+    /// <summary>
     /// Gets or sets whether the key was explicit or computed from payload.
     /// </summary>
     [MaxLength(64)]
@@ -54,6 +60,42 @@ public sealed class SquirrelBoxInboxEntryRecord
     /// </summary>
     [MaxLength(256)]
     public string CorrelationId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the metadata name used to propagate the correlation id.
+    /// </summary>
+    [MaxLength(128)]
+    public string CorrelationIdName { get; set; }
+
+    /// <summary>
+    /// Gets or sets how the correlation id was resolved.
+    /// </summary>
+    [MaxLength(64)]
+    public string CorrelationIdSource { get; set; }
+
+    /// <summary>
+    /// Gets or sets the original attempt id observed when the entry was opened.
+    /// </summary>
+    [MaxLength(256)]
+    public string OriginalAttemptId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the original trace id observed when the entry was opened.
+    /// </summary>
+    [MaxLength(256)]
+    public string OriginalTraceId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the latest attempt id observed for this entry.
+    /// </summary>
+    [MaxLength(256)]
+    public string LastAttemptId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the latest trace id observed for this entry.
+    /// </summary>
+    [MaxLength(256)]
+    public string LastTraceId { get; set; }
 
     /// <summary>
     /// Gets or sets the inbox status.

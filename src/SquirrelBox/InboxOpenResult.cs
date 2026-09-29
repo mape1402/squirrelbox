@@ -44,4 +44,24 @@ public sealed class InboxOpenResult
     /// Gets how the effective idempotency key was obtained.
     /// </summary>
     public InboxIdempotencyKeySource? IdempotencyKeySource => Entry?.IdempotencyKeySource;
+
+    /// <summary>
+    /// Gets the effective correlation id, when available.
+    /// </summary>
+    public string EffectiveCorrelationId => Entry?.CorrelationId;
+
+    /// <summary>
+    /// Gets the effective attempt id for the current open attempt, when available.
+    /// </summary>
+    public string EffectiveAttemptId => Entry?.CurrentAttempt?.AttemptId ?? Entry?.LastAttemptId;
+
+    /// <summary>
+    /// Gets the effective trace id for the current open attempt, when available.
+    /// </summary>
+    public string EffectiveTraceId => Entry?.CurrentAttempt?.TraceId ?? Entry?.LastTraceId;
+
+    /// <summary>
+    /// Gets the effective SquirrelBox identity for this result.
+    /// </summary>
+    public SquirrelBoxIdentity Identity => Entry?.ToIdentity();
 }

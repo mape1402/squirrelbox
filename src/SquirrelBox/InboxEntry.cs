@@ -26,6 +26,11 @@ public sealed class InboxEntry
     public string IdempotencyKey { get; set; }
 
     /// <summary>
+    /// Gets or sets the metadata/header name used to propagate the idempotency key.
+    /// </summary>
+    public string IdempotencyKeyName { get; set; }
+
+    /// <summary>
     /// Gets or sets how the idempotency key was obtained.
     /// </summary>
     public InboxIdempotencyKeySource IdempotencyKeySource { get; set; }
@@ -44,6 +49,41 @@ public sealed class InboxEntry
     /// Gets or sets the correlation id.
     /// </summary>
     public string CorrelationId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the metadata/header name used to propagate the correlation id.
+    /// </summary>
+    public string CorrelationIdName { get; set; }
+
+    /// <summary>
+    /// Gets or sets how the correlation id was resolved.
+    /// </summary>
+    public SquirrelBoxMetadataValueSource CorrelationIdSource { get; set; }
+
+    /// <summary>
+    /// Gets or sets the original attempt id observed when the entry was opened.
+    /// </summary>
+    public string OriginalAttemptId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the original trace id observed when the entry was opened.
+    /// </summary>
+    public string OriginalTraceId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the latest attempt id observed for this entry.
+    /// </summary>
+    public string LastAttemptId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the latest trace id observed for this entry.
+    /// </summary>
+    public string LastTraceId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the current attempt associated with this entry instance.
+    /// </summary>
+    public InboxAttempt CurrentAttempt { get; set; }
 
     /// <summary>
     /// Gets or sets the current inbox status.
@@ -94,4 +134,36 @@ public sealed class InboxEntry
     /// Gets or sets additional inbox metadata.
     /// </summary>
     public Dictionary<string, string> Metadata { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Creates a SquirrelBox identity view for this inbox entry.
+    /// </summary>
+    public SquirrelBoxIdentity ToIdentity()
+        => new()
+        {
+            Operation = new SquirrelBoxOperationIdentity
+            {
+                IdempotencyKey = SquirrelBoxMetadataValue.Create(
+                    IdempotencyKeyName ?? SquirrelBoxMetadataNames.IdempotencyKey,
+                    IdempotencyKey,
+                    IdempotencyKeySource == InboxIdempotencyKeySource.ComputedFromPayload
+                        ? SquirrelBoxMetadataValueSource.ComputedFromPayload
+                        : SquirrelBoxMetadataValueSource.Incoming),
+                CorrelationId = SquirrelBoxMetadataValue.Create(
+                    CorrelationIdName ?? SquirrelBoxMetadataNames.CorrelationId,
+                    CorrelationId,
+                    CorrelationIdSource)
+            },
+            Attempt = new SquirrelBoxAttemptIdentity
+            {
+                AttemptId = SquirrelBoxMetadataValue.Create(
+                    CurrentAttempt?.AttemptIdName ?? SquirrelBoxMetadataNames.AttemptId,
+                    CurrentAttempt?.AttemptId ?? LastAttemptId,
+                    CurrentAttempt?.AttemptIdSource ?? SquirrelBoxMetadataValueSource.Generated),
+                TraceId = SquirrelBoxMetadataValue.Create(
+                    CurrentAttempt?.TraceIdName ?? SquirrelBoxMetadataNames.TraceId,
+                    CurrentAttempt?.TraceId ?? LastTraceId,
+                    CurrentAttempt?.TraceIdSource ?? SquirrelBoxMetadataValueSource.Generated)
+            }
+        };
 }
