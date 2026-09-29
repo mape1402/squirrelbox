@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="2.3.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="2.3.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.3.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.3.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="2.3.0" />
+<PackageReference Include="SquirrelBox" Version="2.4.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="2.4.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.4.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.4.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="2.4.0" />
 ```
 
 ## Getting Started
@@ -293,6 +293,50 @@ HTTP responses include the effective idempotency key, correlation id, attempt id
 When the request uses a configured alternate header such as `X-Idempotency-Key` or
 `X-Correlation-Id`, SquirrelBox propagates the same header name back. Computed keys use the
 configured default response/request header name.
+
+For MVC controllers, add `[SquirrelBoxPayload]` to the action that receives the bound DTO:
+
+```csharp
+[HttpPost("orders")]
+[SquirrelBoxPayload]
+public async Task<ActionResult> Create(CreateOrderRequest request, CancellationToken cancellationToken)
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return result.Executed
+        ? Created($"/orders/{result.Result.Id}", result.Result)
+        : Conflict(result.Decision);
+}
+```
+
+The attribute is method-only and reads the `request` action argument by default. Use
+`[SquirrelBoxPayload("payload")]` when the DTO parameter has a different name.
+
+For Minimal APIs, attach the endpoint filter:
+
+```csharp
+app.MapPost("/orders/computed-key", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return result.Executed
+        ? Results.Created($"/orders/{result.Result.Id}", result.Result)
+        : Results.Conflict(result.Decision);
+})
+.WithSquirrelBoxPayload();
+```
+
+Payload-aware endpoints let `UseSquirrelBox()` defer the open step until after model binding.
+The filter opens or continues the inbox with the bound DTO, verifies that repeated explicit
+keys keep the same payload hash, and reuses the middleware response behavior for replay and
+conflict responses.
 
 ## Dashboard
 

@@ -4,6 +4,19 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.4.0] - 2026-09-29
+
+### Added
+
+- Added method-level `[SquirrelBoxPayload]` for MVC actions so HTTP inbox entries can open from bound DTO payloads after model binding.
+- Added `.WithSquirrelBoxPayload()` for Minimal API endpoints with the same payload-based idempotency behavior.
+- Added ASP.NET Core e2e coverage for computed payload keys, duplicate replay, payload conflicts, custom argument names, and identity response headers.
+
+### Changed
+
+- Changed `UseSquirrelBox()` to defer the HTTP inbox open step for payload-aware endpoints so explicit idempotency keys can still be verified against the bound payload.
+- Updated the sample and README to show payload-aware HTTP endpoints without manual inbox calls inside endpoint bodies.
+
 ## [v2.3.0] - 2026-09-28
 
 ### Added

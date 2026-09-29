@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
-using System.Text.Json;
 
 namespace SquirrelBox.AspNetCore;
 
@@ -43,46 +42,28 @@ public sealed class SquirrelBoxMiddleware
             return;
         }
 
-        httpContext.Response.OnStarting(() =>
-        {
-            if (inbox.LastContext?.Identity is { } identity)
-                AttachIdentityHeaders(httpContext, identity);
+        SquirrelBoxHttpInbox.EnsureIdentityHeadersOnStarting(httpContext, inbox, _options);
 
-            return Task.CompletedTask;
-        });
-
-        var key = ResolveRequestHeader(httpContext, _options.RequestHeaderNames);
-        var correlation = ResolveRequestHeader(httpContext, _options.CorrelationIdHeaderNames);
-        var trace = ResolveRequestHeader(httpContext, _options.TraceIdHeaderNames);
+        var key = SquirrelBoxHttpInbox.ResolveRequestHeader(httpContext, _options.RequestHeaderNames);
+        var deferToPayloadFilter = SquirrelBoxHttpInbox.HasPayloadMetadata(httpContext);
         InboxOpenResult openResult = null;
 
-        if (!string.IsNullOrWhiteSpace(key.Value))
+        if (!deferToPayloadFilter && !string.IsNullOrWhiteSpace(key.Value))
         {
-            openResult = await inbox.OpenOrContinueAsync(new InboxOpenRequest
-            {
-                Source = _options.Source,
-                Operation = _options.OperationResolver(httpContext),
-                IdempotencyKey = key.Value,
-                IdempotencyKeyName = key.Name,
-                CorrelationId = correlation.Value,
-                CorrelationIdName = correlation.Name,
-                TraceId = string.IsNullOrWhiteSpace(trace.Value) ? httpContext.TraceIdentifier : trace.Value,
-                TraceIdName = trace.Name,
-                AttemptIdName = ResolveDefaultName(_options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),
-                Owner = _options.Owner,
-                ExecutionMode = _options.ExecutionModeResolver(httpContext)
-            }, httpContext.RequestAborted);
+            openResult = await inbox.OpenOrContinueAsync(
+                SquirrelBoxHttpInbox.CreateOpenRequest(httpContext, _options),
+                httpContext.RequestAborted);
 
             var decision = policyResolver.Resolve(openResult);
             if (decision.Action is not InboxPolicyAction.Continue)
             {
                 if (decision.Action is InboxPolicyAction.Replay &&
-                    await TryReplayDecisionAsync(httpContext, decision))
+                    await SquirrelBoxHttpInbox.TryReplayDecisionAsync(httpContext, _options, decision))
                 {
                     return;
                 }
 
-                await WriteRejectedDecisionAsync(httpContext, decision);
+                await SquirrelBoxHttpInbox.WriteRejectedDecisionAsync(httpContext, decision);
                 return;
             }
         }
@@ -107,17 +88,17 @@ public sealed class SquirrelBoxMiddleware
 
             await _next(httpContext);
 
-            if (ResolveCompletableContext(inbox, openResult) is { } context &&
+            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult) is { } context &&
                 context.Entry.ExecutionMode == InboxExecutionMode.Inline)
             {
                 await inbox.CompleteCurrentAsync(
-                    capturedBody is null ? null : CreateCompletion(httpContext, capturedBody),
+                    capturedBody is null ? null : SquirrelBoxHttpInbox.CreateCompletion(httpContext, _options, capturedBody),
                     httpContext.RequestAborted);
             }
         }
         catch (Exception exception)
         {
-            if (ResolveCompletableContext(inbox, openResult) is not null)
+            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult) is not null)
                 await inbox.FailCurrentAsync(exception, httpContext.RequestAborted);
 
             throw;
@@ -133,134 +114,4 @@ public sealed class SquirrelBoxMiddleware
             }
         }
     }
-
-    private async Task<bool> TryReplayDecisionAsync(
-        HttpContext httpContext,
-        InboxDecision decision)
-    {
-        if (!_options.ReplayCompletedResponses)
-            return false;
-
-        var completion = decision.Entry?.Completion;
-        if (completion?.StatusCode is null)
-            return false;
-
-        httpContext.Response.StatusCode = completion.StatusCode.Value;
-
-        if (!string.IsNullOrWhiteSpace(completion.ContentType))
-            httpContext.Response.ContentType = completion.ContentType;
-
-        if (decision.Entry?.ToIdentity() is { } identity)
-            AttachIdentityHeaders(httpContext, identity);
-
-        foreach (var header in completion.Headers)
-        {
-            if (ShouldReplayHeader(header.Key))
-                httpContext.Response.Headers[header.Key] = header.Value;
-        }
-
-        if (completion.ResultPayload is { Length: > 0 } payload)
-            await httpContext.Response.Body.WriteAsync(payload, httpContext.RequestAborted);
-
-        return true;
-    }
-
-    private InboxCompletion CreateCompletion(HttpContext httpContext, MemoryStream capturedBody)
-    {
-        var completion = new InboxCompletion
-        {
-            ContentType = httpContext.Response.ContentType,
-            StatusCode = httpContext.Response.StatusCode,
-            ResultPayload = capturedBody.Length <= _options.MaxReplayBodyBytes
-                ? capturedBody.ToArray()
-                : null
-        };
-
-        foreach (var headerName in _options.CapturedResponseHeaderNames)
-        {
-            if (httpContext.Response.Headers.TryGetValue(headerName, out var value) &&
-                !string.IsNullOrWhiteSpace(value.ToString()))
-            {
-                completion.Headers[headerName] = value.ToString();
-            }
-        }
-
-        if (capturedBody.Length > _options.MaxReplayBodyBytes)
-            completion.Metadata["squirrelbox:http:body-too-large"] = "true";
-
-        return completion;
-    }
-
-    private static Task WriteRejectedDecisionAsync(HttpContext httpContext, InboxDecision decision)
-    {
-        httpContext.Response.StatusCode = decision.Action switch
-        {
-            InboxPolicyAction.Skip => StatusCodes.Status409Conflict,
-            InboxPolicyAction.Replay => StatusCodes.Status409Conflict,
-            InboxPolicyAction.Retry => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status409Conflict
-        };
-
-        httpContext.Response.ContentType = "application/json";
-        return httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
-        {
-            decision.State,
-            decision.Action,
-            decision.EffectiveIdempotencyKey,
-            decision.Entry?.CorrelationId,
-            AttemptId = decision.Entry?.CurrentAttempt?.AttemptId ?? decision.Entry?.LastAttemptId,
-            TraceId = decision.Entry?.CurrentAttempt?.TraceId ?? decision.Entry?.LastTraceId
-        }));
-    }
-
-    private bool ShouldReplayHeader(string headerName)
-        => !string.Equals(headerName, "Content-Length", StringComparison.OrdinalIgnoreCase) &&
-           !string.Equals(headerName, "Content-Type", StringComparison.OrdinalIgnoreCase) &&
-           _options.CapturedResponseHeaderNames.Contains(headerName);
-
-    private static InboxContext ResolveCompletableContext(IInboxService inbox, InboxOpenResult openResult)
-    {
-        var context = openResult?.Context ?? inbox.Current;
-        return context is { OwnsCompletion: true } && ReferenceEquals(inbox.Current, context)
-            ? context
-            : null;
-    }
-
-    private ResolvedHeader ResolveRequestHeader(HttpContext httpContext, IEnumerable<string> names)
-    {
-        foreach (var name in names.Where(name => !string.IsNullOrWhiteSpace(name)))
-        {
-            var value = httpContext.Request.Headers[name].FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(value))
-                return new ResolvedHeader(name, value);
-        }
-
-        return new ResolvedHeader(ResolveDefaultName(names, null), null);
-    }
-
-    private void AttachIdentityHeaders(HttpContext httpContext, SquirrelBoxIdentity identity)
-    {
-        AttachHeader(httpContext, ResolveIdempotencyHeaderName(identity), identity.Operation.IdempotencyKey?.Value);
-        AttachHeader(httpContext, identity.Operation.CorrelationId?.Name, identity.Operation.CorrelationId?.Value);
-        AttachHeader(httpContext, identity.Attempt.AttemptId?.Name, identity.Attempt.AttemptId?.Value);
-        AttachHeader(httpContext, identity.Attempt.TraceId?.Name, identity.Attempt.TraceId?.Value);
-    }
-
-    private string ResolveIdempotencyHeaderName(SquirrelBoxIdentity identity)
-        => !string.IsNullOrWhiteSpace(identity.Operation.IdempotencyKey?.Name)
-            ? identity.Operation.IdempotencyKey.Name
-            : !string.IsNullOrWhiteSpace(_options.ResponseHeaderName)
-                ? _options.ResponseHeaderName
-                : ResolveDefaultName(_options.RequestHeaderNames, SquirrelBoxMetadataNames.IdempotencyKey);
-
-    private static void AttachHeader(HttpContext httpContext, string name, string value)
-    {
-        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(value))
-            httpContext.Response.Headers[name] = value;
-    }
-
-    private static string ResolveDefaultName(IEnumerable<string> names, string fallback)
-        => names?.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? fallback;
-
-    private sealed record ResolvedHeader(string Name, string Value);
 }

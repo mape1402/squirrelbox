@@ -115,7 +115,7 @@ app.MapGet("/", () => Results.Ok(new
     endpoints = new[]
     {
         "POST /orders/inline executes a declared operation inline.",
-        "POST /orders/computed-key executes inline and returns a computed Idempotency-Key.",
+        "POST /orders/computed-key opens HTTP inbox from the bound payload and returns a computed Idempotency-Key.",
         "POST /orders/deferred schedules the declared operation through Mule.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
@@ -149,7 +149,8 @@ app.MapPost("/orders/computed-key", async (
         cancellationToken);
 
     return ToHttpResult(result);
-});
+})
+.WithSquirrelBoxPayload();
 
 app.MapPost("/orders/deferred", async (
     CreateOrderRequest request,
