@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="2.2.1" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="2.2.1" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.2.1" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.2.1" />
-<PackageReference Include="SquirrelBox.Mule" Version="2.2.1" />
+<PackageReference Include="SquirrelBox" Version="2.3.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="2.3.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.3.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.3.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="2.3.0" />
 ```
 
 ## Getting Started
@@ -121,6 +121,43 @@ catch (Exception ex)
 ```
 
 Entries use ULID ids and move through `Started`, `Completed`, `Failed`, and `Expired`.
+
+### Identity Metadata
+
+SquirrelBox now tracks two identity layers for every inbox open attempt:
+
+```text
+Operation identity: IdempotencyKey + CorrelationId
+Attempt identity:   AttemptId + TraceId
+```
+
+The idempotency key and correlation id are matched 1:1 for the protected operation. If the
+first request/message does not provide either value, SquirrelBox can compute the idempotency
+key from the semantic payload hash and generate the correlation id. Later duplicates that
+produce the same idempotency key return the original correlation id, while each duplicate
+open attempt receives a new attempt id and trace id.
+
+```csharp
+var identity = inbox.LastContext?.Identity;
+
+var operationKey = identity?.Operation.IdempotencyKey.Value;
+var correlationId = identity?.Operation.CorrelationId.Value;
+var attemptId = identity?.Attempt.AttemptId.Value;
+var traceId = identity?.Attempt.TraceId.Value;
+```
+
+Services in the current request/message scope can also inject `ISquirrelBoxIdentityAccessor`
+to read the current accepted identity. The default factories are replaceable:
+
+```csharp
+services.AddSingleton<ICorrelationIdFactory, MyCorrelationIdFactory>();
+services.AddSingleton<ITraceIdFactory, MyTraceIdFactory>();
+services.AddSingleton<IAttemptIdFactory, MyAttemptIdFactory>();
+
+services.AddSquirrelBox();
+```
+
+Register custom factories before `AddSquirrelBox()` or replace the service descriptor explicitly.
 
 ## Declared Operations
 
@@ -252,6 +289,11 @@ app.UseSquirrelBox();
 
 If a request has an idempotency header, middleware reserves the inbox entry before the endpoint runs. If the request does not have a header, your endpoint can open SquirrelBox after model binding so the computed key is based on the DTO instead of raw body bytes.
 
+HTTP responses include the effective idempotency key, correlation id, attempt id, and trace id.
+When the request uses a configured alternate header such as `X-Idempotency-Key` or
+`X-Correlation-Id`, SquirrelBox propagates the same header name back. Computed keys use the
+configured default response/request header name.
+
 ## Dashboard
 
 Add the event-driven dashboard:
@@ -331,6 +373,20 @@ The default operation shape is:
 topic:version/subscription/operation
 ```
 
+`AttachEffectiveKey` is kept for compatibility, but it now writes the complete
+`SquirrelBoxMessageMetadata` model into outgoing metadata:
+
+```text
+idempotency-key
+correlation-id
+attempt-id
+trace-id
+```
+
+Adapters can use `ISquirrelBoxMessageMetadataEnricher` directly when they need to attach the
+current identity to replies, orchestration metadata, or outgoing messages without depending on
+Pigeon.
+
 ## Pigeon
 
 `SquirrelBox.Messaging.Pigeon` targets Pigeon 4.0.0 and integrates with consume and publish interceptors.
@@ -357,6 +413,7 @@ Publish:
 
 - Publish decision interceptor persists Pigeon's prepared `PigeonPublishEnvelope` in SquirrelBox Outbox.
 - Pigeon publish is skipped inline after the envelope is durable.
+- Outgoing Pigeon envelopes are enriched with the current SquirrelBox idempotency key, correlation id, attempt id, and trace id when a current inbox identity exists.
 - Mule later publishes through `IPigeonPublisherInvoker` without rerunning producer interceptors, publish decision interceptors, or Pigeon's internal outbox logic.
 - Normal and raw publish flows are supported.
 

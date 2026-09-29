@@ -28,6 +28,9 @@ public sealed class InboxMessageServiceE2ETests
 
         var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         first.AttachEffectiveKey(replyMetadata);
+        var openedCorrelationId = opened.EffectiveCorrelationId;
+        var openedAttemptId = opened.EffectiveAttemptId;
+        var openedTraceId = opened.EffectiveTraceId;
         await firstScope.ServiceProvider.GetRequiredService<IInboxService>().CompleteCurrentAsync();
 
         using var secondScope = provider.CreateScope();
@@ -49,8 +52,14 @@ public sealed class InboxMessageServiceE2ETests
 
         Assert.True(opened.ShouldExecute);
         Assert.Equal("message-key", replyMetadata["idempotency-key"]);
+        Assert.Equal(openedCorrelationId, replyMetadata["correlation-id"]);
+        Assert.Equal(openedAttemptId, replyMetadata["attempt-id"]);
+        Assert.Equal(openedTraceId, replyMetadata["trace-id"]);
         Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.OpenResult.State);
         Assert.Equal("orders:v1/billing/created", duplicate.OpenResult.Entry.Operation);
+        Assert.Equal(openedCorrelationId, duplicate.EffectiveCorrelationId);
+        Assert.NotEqual(openedAttemptId, duplicate.EffectiveAttemptId);
+        Assert.NotEqual(openedTraceId, duplicate.EffectiveTraceId);
     }
 
     [Fact]
@@ -76,6 +85,44 @@ public sealed class InboxMessageServiceE2ETests
         Assert.Equal(InboxOpenState.Opened, opened.OpenResult.State);
         Assert.Equal(InboxIdempotencyKeySource.ComputedFromPayload, opened.OpenResult.IdempotencyKeySource);
         Assert.Equal(opened.EffectiveIdempotencyKey, replyMetadata["idempotency-key"]);
+        Assert.Equal(opened.EffectiveCorrelationId, replyMetadata["correlation-id"]);
+        Assert.Equal(opened.EffectiveAttemptId, replyMetadata["attempt-id"]);
+        Assert.Equal(opened.EffectiveTraceId, replyMetadata["trace-id"]);
+    }
+
+    [Fact]
+    public async Task OpenAsync_preserves_custom_metadata_names_for_identity_propagation()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            Payload = new OrderMessage("order-custom"),
+            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["x-idempotency-key"] = "custom-key",
+                ["x-correlation-id"] = "corr-custom",
+                ["x-trace-id"] = "trace-custom"
+            }
+        });
+
+        var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        service.AttachEffectiveKey(replyMetadata);
+
+        Assert.Equal("custom-key", opened.EffectiveMetadata.IdempotencyKey.Value);
+        Assert.Equal("corr-custom", opened.EffectiveMetadata.CorrelationId.Value);
+        Assert.Equal("trace-custom", opened.EffectiveMetadata.TraceId.Value);
+        Assert.Equal("custom-key", replyMetadata["x-idempotency-key"]);
+        Assert.Equal("corr-custom", replyMetadata["x-correlation-id"]);
+        Assert.Equal("trace-custom", replyMetadata["x-trace-id"]);
+        Assert.Equal(opened.EffectiveAttemptId, replyMetadata["attempt-id"]);
     }
 
     private static ServiceProvider CreateProvider()

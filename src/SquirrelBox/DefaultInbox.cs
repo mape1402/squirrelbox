@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace SquirrelBox;
 
@@ -8,8 +9,12 @@ namespace SquirrelBox;
 public sealed class DefaultInbox : IInboxService
 {
     private readonly IInboxContextAccessor _contextAccessor;
+    private readonly ISquirrelBoxIdentityAccessor _identityAccessor;
     private readonly SquirrelBoxOptions _options;
     private readonly IInboxPayloadHasher _payloadHasher;
+    private readonly ICorrelationIdFactory _correlationIdFactory;
+    private readonly ITraceIdFactory _traceIdFactory;
+    private readonly IAttemptIdFactory _attemptIdFactory;
     private readonly ISquirrelBoxEventPublisher _events;
     private readonly IInboxStore _store;
     private readonly TimeProvider _timeProvider;
@@ -23,7 +28,11 @@ public sealed class DefaultInbox : IInboxService
     public DefaultInbox(
         IOptions<SquirrelBoxOptions> options,
         IInboxContextAccessor contextAccessor,
+        ISquirrelBoxIdentityAccessor identityAccessor,
         IInboxPayloadHasher payloadHasher,
+        ICorrelationIdFactory correlationIdFactory,
+        ITraceIdFactory traceIdFactory,
+        IAttemptIdFactory attemptIdFactory,
         ISquirrelBoxEventPublisher events,
         IInboxStore store,
         TimeProvider timeProvider,
@@ -31,7 +40,11 @@ public sealed class DefaultInbox : IInboxService
     {
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
+        _identityAccessor = identityAccessor ?? throw new ArgumentNullException(nameof(identityAccessor));
         _payloadHasher = payloadHasher ?? throw new ArgumentNullException(nameof(payloadHasher));
+        _correlationIdFactory = correlationIdFactory ?? throw new ArgumentNullException(nameof(correlationIdFactory));
+        _traceIdFactory = traceIdFactory ?? throw new ArgumentNullException(nameof(traceIdFactory));
+        _attemptIdFactory = attemptIdFactory ?? throw new ArgumentNullException(nameof(attemptIdFactory));
         _events = events ?? throw new ArgumentNullException(nameof(events));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -49,6 +62,7 @@ public sealed class DefaultInbox : IInboxService
     {
         ArgumentNullException.ThrowIfNull(request);
         _contextAccessor.Prepare();
+        _identityAccessor.Prepare();
 
         if (Current is { } current)
             return new InboxOpenResult(InboxOpenState.Continued, current);
@@ -58,6 +72,7 @@ public sealed class DefaultInbox : IInboxService
 
         var payloadHash = request.Payload is null ? null : _payloadHasher.ComputeHash(request.Payload);
         var idempotencyKey = request.IdempotencyKey;
+        var idempotencyKeyName = ResolveName(request.IdempotencyKeyName, SquirrelBoxMetadataNames.IdempotencyKey);
         var keySource = InboxIdempotencyKeySource.Explicit;
 
         if (string.IsNullOrWhiteSpace(idempotencyKey))
@@ -71,16 +86,51 @@ public sealed class DefaultInbox : IInboxService
         }
 
         var now = _timeProvider.GetUtcNow();
+        var identityFactoryContext = new InboxIdentityFactoryContext
+        {
+            Source = request.Source,
+            Operation = request.Operation,
+            IdempotencyKey = idempotencyKey,
+            IdempotencyKeySource = keySource,
+            IncomingCorrelationId = request.CorrelationId,
+            IncomingTraceId = request.TraceId,
+            Payload = request.Payload,
+            Metadata = request.Metadata
+        };
+        var correlationId = _correlationIdFactory.Create(identityFactoryContext);
+        var traceId = _traceIdFactory.Create(identityFactoryContext);
+        var attempt = new InboxAttempt
+        {
+            Id = Ulid.NewUlid(),
+            AttemptId = _attemptIdFactory.Create(identityFactoryContext),
+            AttemptIdName = ResolveName(request.AttemptIdName, SquirrelBoxMetadataNames.AttemptId),
+            AttemptIdSource = SquirrelBoxMetadataValueSource.Generated,
+            TraceId = traceId,
+            TraceIdName = ResolveName(request.TraceIdName, SquirrelBoxMetadataNames.TraceId),
+            TraceIdSource = ResolveTraceSource(request),
+            CreatedOnUtc = now,
+            Metadata = new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase)
+        };
         var entry = new InboxEntry
         {
             Id = Ulid.NewUlid(),
             Source = request.Source,
             Operation = request.Operation,
             IdempotencyKey = idempotencyKey,
+            IdempotencyKeyName = idempotencyKeyName,
             IdempotencyKeySource = keySource,
             PayloadHash = payloadHash,
             PayloadType = request.PayloadType ?? request.Payload?.GetType().AssemblyQualifiedName,
-            CorrelationId = request.CorrelationId,
+            CorrelationId = correlationId,
+            CorrelationIdName = ResolveName(request.CorrelationIdName, SquirrelBoxMetadataNames.CorrelationId),
+            CorrelationIdSource = string.IsNullOrWhiteSpace(request.CorrelationId)
+                ? SquirrelBoxMetadataValueSource.Generated
+                : SquirrelBoxMetadataValueSource.Incoming,
+            OriginalAttemptId = attempt.AttemptId,
+            OriginalTraceId = attempt.TraceId,
+            LastAttemptId = attempt.AttemptId,
+            LastTraceId = attempt.TraceId,
+            CurrentAttempt = attempt,
             ExecutionMode = request.ExecutionMode ?? _options.DefaultExecutionMode,
             Status = InboxStatus.Started,
             CreatedOnUtc = now,
@@ -88,6 +138,7 @@ public sealed class DefaultInbox : IInboxService
             ExpiresOnUtc = request.ExpiresOnUtc ?? ResolveDefaultExpiration(now),
             Metadata = new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase)
         };
+        attempt.InboxEntryId = entry.Id;
 
         var result = await _transactionRunner.RunAsync(token => _store.TryOpenAsync(entry, token), cancellationToken);
         if (result.State == InboxOpenState.Opened)
@@ -100,6 +151,7 @@ public sealed class DefaultInbox : IInboxService
 
             SetCurrent(context);
             _lastContext = context;
+            _identityAccessor.Current = context.Identity;
             await PublishEventAsync(SquirrelBoxEventNames.InboxOpened, result.Entry, cancellationToken);
             await PublishEventAsync(SquirrelBoxEventNames.InboxAccepted, result.Entry, cancellationToken);
             return new InboxOpenResult(InboxOpenState.Opened, context);
@@ -108,6 +160,7 @@ public sealed class DefaultInbox : IInboxService
         if (result.Entry is not null)
         {
             _lastContext = new InboxContext(result.Entry, request.Owner ?? _options.DefaultOwner, false, Current);
+            _identityAccessor.Current = _lastContext.Identity;
             await PublishEventAsync(SquirrelBoxEventNames.InboxDuplicated, result.Entry, cancellationToken);
         }
 
@@ -122,6 +175,7 @@ public sealed class DefaultInbox : IInboxService
         CancellationToken cancellationToken = default)
     {
         _contextAccessor.Prepare();
+        _identityAccessor.Prepare();
         var resolvedOwner = owner ?? _options.DefaultOwner;
 
         if (Current is { } current &&
@@ -144,6 +198,7 @@ public sealed class DefaultInbox : IInboxService
 
         SetCurrent(context);
         _lastContext = context;
+        _identityAccessor.Current = context.Identity;
         return context;
     }
 
@@ -243,6 +298,20 @@ public sealed class DefaultInbox : IInboxService
     {
         _current = context;
         _contextAccessor.Current = context;
+        _identityAccessor.Current = context?.Identity;
+    }
+
+    private static string ResolveName(string name, string fallback)
+        => string.IsNullOrWhiteSpace(name) ? fallback : name;
+
+    private static SquirrelBoxMetadataValueSource ResolveTraceSource(InboxOpenRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.TraceId))
+            return SquirrelBoxMetadataValueSource.Incoming;
+
+        return Activity.Current is null
+            ? SquirrelBoxMetadataValueSource.Generated
+            : SquirrelBoxMetadataValueSource.Activity;
     }
 
     private ValueTask PublishEventAsync(
@@ -263,6 +332,9 @@ public sealed class DefaultInbox : IInboxService
         @event.Metadata["source"] = entry.Source;
         @event.Metadata["operation"] = entry.Operation;
         @event.Metadata["idempotency-key"] = entry.IdempotencyKey;
+        @event.Metadata["correlation-id"] = entry.CorrelationId;
+        @event.Metadata["attempt-id"] = entry.CurrentAttempt?.AttemptId ?? entry.LastAttemptId;
+        @event.Metadata["trace-id"] = entry.CurrentAttempt?.TraceId ?? entry.LastTraceId;
         @event.Metadata["execution-mode"] = entry.ExecutionMode.ToString();
         return _events.PublishAsync(@event, cancellationToken);
     }

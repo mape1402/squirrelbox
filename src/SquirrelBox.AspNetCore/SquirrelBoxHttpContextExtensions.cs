@@ -31,16 +31,39 @@ public static class SquirrelBoxHttpContextExtensions
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(inbox);
 
-        var idempotencyKey = httpContext.Request.Headers["Idempotency-Key"].FirstOrDefault()
-            ?? httpContext.Request.Headers["X-Idempotency-Key"].FirstOrDefault();
+        var idempotencyKey = ResolveHeader(httpContext, "Idempotency-Key", "X-Idempotency-Key");
+        var correlationId = ResolveHeader(httpContext, "Correlation-Id", "X-Correlation-Id");
+        var traceId = ResolveHeader(httpContext, "Trace-Id", "X-Trace-Id", "traceparent");
 
-        return inbox.OpenOrContinueAsync(InboxOpenRequest.For(
-            source,
-            operation ?? $"{httpContext.Request.Method.ToUpperInvariant()} {httpContext.Request.Path.Value}",
-            idempotencyKey,
-            payload,
-            httpContext.TraceIdentifier,
-            owner: "aspnetcore-endpoint",
-            executionMode: executionMode), cancellationToken);
+        return inbox.OpenOrContinueAsync(new InboxOpenRequest
+        {
+            Source = source,
+            Operation = operation ?? $"{httpContext.Request.Method.ToUpperInvariant()} {httpContext.Request.Path.Value}",
+            IdempotencyKey = idempotencyKey.Value,
+            IdempotencyKeyName = idempotencyKey.Name,
+            Payload = payload,
+            PayloadType = typeof(TPayload).AssemblyQualifiedName,
+            CorrelationId = correlationId.Value,
+            CorrelationIdName = correlationId.Name,
+            TraceId = string.IsNullOrWhiteSpace(traceId.Value) ? httpContext.TraceIdentifier : traceId.Value,
+            TraceIdName = traceId.Name,
+            AttemptIdName = "SquirrelBox-Attempt-Id",
+            Owner = "aspnetcore-endpoint",
+            ExecutionMode = executionMode
+        }, cancellationToken);
     }
+
+    private static ResolvedHeader ResolveHeader(HttpContext httpContext, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = httpContext.Request.Headers[name].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(value))
+                return new ResolvedHeader(name, value);
+        }
+
+        return new ResolvedHeader(names.FirstOrDefault(), null);
+    }
+
+    private sealed record ResolvedHeader(string Name, string Value);
 }

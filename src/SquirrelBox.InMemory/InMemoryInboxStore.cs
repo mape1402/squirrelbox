@@ -9,6 +9,7 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
 {
     private readonly ConcurrentDictionary<string, InboxEntry> _entriesByKey = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Ulid, InboxEntry> _entriesById = new();
+    private readonly ConcurrentDictionary<Ulid, ConcurrentQueue<InboxAttempt>> _attemptsByEntryId = new();
 
     /// <inheritdoc />
     public ValueTask<InboxOpenResult> TryOpenAsync(InboxEntry entry, CancellationToken cancellationToken = default)
@@ -18,6 +19,7 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
         var key = BuildKey(entry);
         var stored = _entriesByKey.GetOrAdd(key, _ =>
         {
+            RecordAttempt(entry, InboxOpenState.Opened, entry);
             _entriesById[entry.Id] = entry;
             return entry;
         });
@@ -29,6 +31,7 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
         {
             stored.Status = InboxStatus.Expired;
             stored.UpdatedOnUtc = entry.CreatedOnUtc;
+            RecordAttempt(stored, InboxOpenState.Expired, entry);
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Expired, entry: stored));
         }
 
@@ -36,13 +39,16 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
             !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
             !string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
         {
+            RecordAttempt(stored, InboxOpenState.PayloadConflict, entry);
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.PayloadConflict, entry: stored));
         }
 
         if (string.IsNullOrWhiteSpace(stored.PayloadHash) && !string.IsNullOrWhiteSpace(entry.PayloadHash))
             stored.PayloadHash = entry.PayloadHash;
 
-        return ValueTask.FromResult(new InboxOpenResult(MapDuplicateState(stored), entry: stored));
+        var state = MapDuplicateState(stored);
+        RecordAttempt(stored, state, entry);
+        return ValueTask.FromResult(new InboxOpenResult(state, entry: stored));
     }
 
     /// <inheritdoc />
@@ -139,6 +145,39 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
             InboxStatus.Failed => InboxOpenState.DuplicateFailed,
             InboxStatus.Expired => InboxOpenState.Expired,
             _ => InboxOpenState.DuplicateInProgress
+        };
+
+    private void RecordAttempt(InboxEntry stored, InboxOpenState state, InboxEntry incoming)
+    {
+        if (incoming.CurrentAttempt is null)
+            return;
+
+        var attempt = CloneAttempt(incoming.CurrentAttempt, stored.Id, state);
+        stored.CurrentAttempt = attempt;
+        stored.LastAttemptId = attempt.AttemptId;
+        stored.LastTraceId = attempt.TraceId;
+        stored.Metadata[SquirrelBoxMetadataNames.AttemptId] = attempt.AttemptId;
+        stored.Metadata[SquirrelBoxMetadataNames.TraceId] = attempt.TraceId;
+
+        _attemptsByEntryId
+            .GetOrAdd(stored.Id, _ => new ConcurrentQueue<InboxAttempt>())
+            .Enqueue(attempt);
+    }
+
+    private static InboxAttempt CloneAttempt(InboxAttempt attempt, Ulid entryId, InboxOpenState state)
+        => new()
+        {
+            Id = attempt.Id == default ? Ulid.NewUlid() : attempt.Id,
+            InboxEntryId = entryId,
+            AttemptId = attempt.AttemptId,
+            AttemptIdName = attempt.AttemptIdName,
+            AttemptIdSource = attempt.AttemptIdSource,
+            TraceId = attempt.TraceId,
+            TraceIdName = attempt.TraceIdName,
+            TraceIdSource = attempt.TraceIdSource,
+            State = state,
+            CreatedOnUtc = attempt.CreatedOnUtc,
+            Metadata = new Dictionary<string, string>(attempt.Metadata, StringComparer.OrdinalIgnoreCase)
         };
 
     private InboxEntry GetExisting(Ulid entryId)

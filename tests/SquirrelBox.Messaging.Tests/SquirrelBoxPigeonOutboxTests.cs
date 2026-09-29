@@ -54,6 +54,46 @@ public sealed class SquirrelBoxPigeonOutboxTests
     }
 
     [Fact]
+    public async Task PublishDecisionInterceptor_enriches_pigeon_envelope_with_current_squirrelbox_identity()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        var opened = await inbox.OpenOrContinueAsync(new InboxOpenRequest
+        {
+            Source = "pigeon",
+            Operation = "orders:1.2.0/billing/OrderMessage",
+            IdempotencyKey = "consume-key",
+            CorrelationId = "consume-correlation",
+            TraceId = "consume-trace"
+        });
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonOutboxInterceptor>(scope.ServiceProvider);
+        var context = CreatePublishContext(isRaw: false);
+
+        var result = await interceptor.InterceptAsync(context);
+        var envelopes = await scope.ServiceProvider.GetRequiredService<IOutboxStore>()
+            .QueryAsync(new OutboxQuery { Transport = "pigeon" });
+
+        var envelope = Assert.Single(envelopes);
+        var serializer = scope.ServiceProvider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = (PigeonPublishEnvelope)serializer.Deserialize(
+            envelope.Payload,
+            typeof(PigeonPublishEnvelope));
+
+        Assert.Equal(PigeonPublishDecision.Skip, result.Decision);
+        Assert.Equal(opened.EffectiveIdempotencyKey, envelope.Metadata["idempotency-key"]);
+        Assert.Equal(opened.EffectiveCorrelationId, envelope.Metadata["correlation-id"]);
+        Assert.Equal(opened.EffectiveAttemptId, envelope.Metadata["attempt-id"]);
+        Assert.Equal(opened.EffectiveTraceId, envelope.Metadata["trace-id"]);
+        Assert.Equal(opened.EffectiveIdempotencyKey, publishEnvelope.Metadata["idempotency-key"]);
+        Assert.Equal(opened.EffectiveCorrelationId, publishEnvelope.Metadata["correlation-id"]);
+        Assert.Equal(opened.EffectiveAttemptId, publishEnvelope.Metadata["attempt-id"]);
+        Assert.Equal(opened.EffectiveTraceId, publishEnvelope.Metadata["trace-id"]);
+        Assert.Equal(opened.EffectiveCorrelationId, envelope.CorrelationId);
+        Assert.Equal(opened.EffectiveTraceId, envelope.TraceId);
+    }
+
+    [Fact]
     public async Task PigeonOutboxPublisher_replays_pigeon_publish_envelope_through_pigeon_invoker()
     {
         using var provider = CreateProvider();
@@ -119,6 +159,7 @@ public sealed class SquirrelBoxPigeonOutboxTests
         services.AddSingleton<IOutboxTransportPublisher>(
             provider => provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>());
         services.AddSquirrelBox().UseInMemory();
+        services.AddSquirrelBoxMessaging();
         return services.BuildServiceProvider();
     }
 

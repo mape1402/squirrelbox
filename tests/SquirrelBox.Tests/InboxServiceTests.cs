@@ -170,6 +170,64 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task OpenOrContinueAsync_preserves_correlation_for_computed_duplicates_and_tracks_new_attempts()
+    {
+        var provider = CreateProvider();
+        InboxOpenResult opened;
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var inbox = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            opened = await inbox.OpenOrContinueAsync(new InboxOpenRequest
+            {
+                Source = "http",
+                Operation = "POST /orders",
+                Payload = new TestPayload("order-identity"),
+                IdempotencyKeyName = "x-idempotency-key",
+                CorrelationIdName = "x-correlation-id",
+                TraceIdName = "x-trace-id",
+                AttemptIdName = "x-attempt-id"
+            });
+
+            var currentIdentity = firstScope.ServiceProvider
+                .GetRequiredService<ISquirrelBoxIdentityAccessor>()
+                .Current;
+            Assert.Equal(opened.EffectiveCorrelationId, currentIdentity.Operation.CorrelationId.Value);
+            Assert.Equal(opened.EffectiveTraceId, currentIdentity.Attempt.TraceId.Value);
+
+            await inbox.CompleteCurrentAsync();
+        }
+        var openedIdempotencyKey = opened.EffectiveIdempotencyKey;
+        var openedCorrelationId = opened.EffectiveCorrelationId;
+        var openedAttemptId = opened.EffectiveAttemptId;
+        var openedTraceId = opened.EffectiveTraceId;
+
+        using var secondScope = provider.CreateScope();
+        var duplicate = await secondScope.ServiceProvider
+            .GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(new InboxOpenRequest
+            {
+                Source = "http",
+                Operation = "POST /orders",
+                Payload = new TestPayload("order-identity"),
+                IdempotencyKeyName = "x-idempotency-key",
+                CorrelationIdName = "x-correlation-id",
+                TraceIdName = "x-trace-id",
+                AttemptIdName = "x-attempt-id"
+            });
+
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.State);
+        Assert.Equal(openedIdempotencyKey, duplicate.EffectiveIdempotencyKey);
+        Assert.Equal(openedCorrelationId, duplicate.EffectiveCorrelationId);
+        Assert.NotEqual(openedTraceId, duplicate.EffectiveTraceId);
+        Assert.NotEqual(openedAttemptId, duplicate.EffectiveAttemptId);
+        Assert.Equal("x-idempotency-key", duplicate.Identity.Operation.IdempotencyKey.Name);
+        Assert.Equal("x-correlation-id", duplicate.Identity.Operation.CorrelationId.Name);
+        Assert.Equal("x-trace-id", duplicate.Identity.Attempt.TraceId.Name);
+        Assert.Equal("x-attempt-id", duplicate.Identity.Attempt.AttemptId.Name);
+    }
+
+    [Fact]
     public async Task OpenOrContinueAsync_returns_missing_key_when_no_key_or_payload_available()
     {
         var inbox = CreateInbox();

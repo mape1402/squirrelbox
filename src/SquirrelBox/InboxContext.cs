@@ -45,4 +45,9 @@ public sealed class InboxContext
     /// Gets how the effective idempotency key was obtained.
     /// </summary>
     public InboxIdempotencyKeySource IdempotencyKeySource => Entry.IdempotencyKeySource;
+
+    /// <summary>
+    /// Gets the current SquirrelBox operation and attempt identity.
+    /// </summary>
+    public SquirrelBoxIdentity Identity => Entry.ToIdentity();
 }

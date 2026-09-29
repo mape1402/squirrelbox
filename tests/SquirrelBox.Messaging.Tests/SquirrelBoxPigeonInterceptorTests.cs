@@ -27,6 +27,11 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal("pigeon-key", inbox.Current.EffectiveIdempotencyKey);
         Assert.Equal("orders:1.2.0/billing/OrderMessage", inbox.Current.Entry.Operation);
         Assert.Equal("pigeon-key", context.ReplyMetadata["idempotency-key"]);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyMetadata["correlation-id"]);
+        Assert.Equal(inbox.Current.Entry.LastAttemptId, context.ReplyMetadata["attempt-id"]);
+        Assert.Equal(inbox.Current.Entry.LastTraceId, context.ReplyMetadata["trace-id"]);
+        Assert.Equal("pigeon-key", context.ReplyHeaders["idempotency-key"]);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyHeaders["correlation-id"]);
     }
 
     [Fact]
@@ -89,6 +94,12 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         var envelope = Assert.IsType<PigeonConsumeEnvelope>(scheduler.Payloads.Single());
         Assert.Equal("orders", envelope.Topic);
         Assert.Equal("pigeon-key", envelope.Metadata["idempotency-key"]);
+        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["correlation-id"]));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["attempt-id"]));
+        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["trace-id"]));
+        Assert.Equal(envelope.Metadata["correlation-id"], result.Metadata["correlation-id"]);
+        Assert.Equal(envelope.Metadata["attempt-id"], result.Metadata["attempt-id"]);
+        Assert.Equal(envelope.Metadata["trace-id"], result.Metadata["trace-id"]);
         Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
     }
 
@@ -125,6 +136,10 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(PigeonConsumeDecision.Continue, result.Decision);
         Assert.Empty(scope.ServiceProvider.GetRequiredService<FakeInboxMuleScheduler>().Payloads);
         Assert.Equal("pigeon-key", inbox.Current.EffectiveIdempotencyKey);
+        Assert.Equal("pigeon-key", context.ReplyMetadata["idempotency-key"]);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyMetadata["correlation-id"]);
+        Assert.Equal(inbox.Current.Entry.LastAttemptId, context.ReplyMetadata["attempt-id"]);
+        Assert.Equal(inbox.Current.Entry.LastTraceId, context.ReplyMetadata["trace-id"]);
     }
 
     [Fact]

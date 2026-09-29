@@ -43,26 +43,32 @@ public sealed class SquirrelBoxMiddleware
             return;
         }
 
-        var responseHeaderName = ResolveResponseHeaderName();
         httpContext.Response.OnStarting(() =>
         {
-            if (inbox.LastContext?.EffectiveIdempotencyKey is { Length: > 0 } key)
-                httpContext.Response.Headers[responseHeaderName] = key;
+            if (inbox.LastContext?.Identity is { } identity)
+                AttachIdentityHeaders(httpContext, identity);
 
             return Task.CompletedTask;
         });
 
-        var key = ResolveRequestKey(httpContext);
+        var key = ResolveRequestHeader(httpContext, _options.RequestHeaderNames);
+        var correlation = ResolveRequestHeader(httpContext, _options.CorrelationIdHeaderNames);
+        var trace = ResolveRequestHeader(httpContext, _options.TraceIdHeaderNames);
         InboxOpenResult openResult = null;
 
-        if (!string.IsNullOrWhiteSpace(key))
+        if (!string.IsNullOrWhiteSpace(key.Value))
         {
             openResult = await inbox.OpenOrContinueAsync(new InboxOpenRequest
             {
                 Source = _options.Source,
                 Operation = _options.OperationResolver(httpContext),
-                IdempotencyKey = key,
-                CorrelationId = httpContext.TraceIdentifier,
+                IdempotencyKey = key.Value,
+                IdempotencyKeyName = key.Name,
+                CorrelationId = correlation.Value,
+                CorrelationIdName = correlation.Name,
+                TraceId = string.IsNullOrWhiteSpace(trace.Value) ? httpContext.TraceIdentifier : trace.Value,
+                TraceIdName = trace.Name,
+                AttemptIdName = ResolveDefaultName(_options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),
                 Owner = _options.Owner,
                 ExecutionMode = _options.ExecutionModeResolver(httpContext)
             }, httpContext.RequestAborted);
@@ -71,7 +77,7 @@ public sealed class SquirrelBoxMiddleware
             if (decision.Action is not InboxPolicyAction.Continue)
             {
                 if (decision.Action is InboxPolicyAction.Replay &&
-                    await TryReplayDecisionAsync(httpContext, decision, responseHeaderName))
+                    await TryReplayDecisionAsync(httpContext, decision))
                 {
                     return;
                 }
@@ -130,8 +136,7 @@ public sealed class SquirrelBoxMiddleware
 
     private async Task<bool> TryReplayDecisionAsync(
         HttpContext httpContext,
-        InboxDecision decision,
-        string responseHeaderName)
+        InboxDecision decision)
     {
         if (!_options.ReplayCompletedResponses)
             return false;
@@ -145,8 +150,8 @@ public sealed class SquirrelBoxMiddleware
         if (!string.IsNullOrWhiteSpace(completion.ContentType))
             httpContext.Response.ContentType = completion.ContentType;
 
-        if (!string.IsNullOrWhiteSpace(decision.EffectiveIdempotencyKey))
-            httpContext.Response.Headers[responseHeaderName] = decision.EffectiveIdempotencyKey;
+        if (decision.Entry?.ToIdentity() is { } identity)
+            AttachIdentityHeaders(httpContext, identity);
 
         foreach (var header in completion.Headers)
         {
@@ -201,7 +206,10 @@ public sealed class SquirrelBoxMiddleware
         {
             decision.State,
             decision.Action,
-            decision.EffectiveIdempotencyKey
+            decision.EffectiveIdempotencyKey,
+            decision.Entry?.CorrelationId,
+            AttemptId = decision.Entry?.CurrentAttempt?.AttemptId ?? decision.Entry?.LastAttemptId,
+            TraceId = decision.Entry?.CurrentAttempt?.TraceId ?? decision.Entry?.LastTraceId
         }));
     }
 
@@ -218,13 +226,41 @@ public sealed class SquirrelBoxMiddleware
             : null;
     }
 
-    private string ResolveRequestKey(HttpContext httpContext)
-        => _options.RequestHeaderNames
-            .Select(header => httpContext.Request.Headers[header].FirstOrDefault())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    private ResolvedHeader ResolveRequestHeader(HttpContext httpContext, IEnumerable<string> names)
+    {
+        foreach (var name in names.Where(name => !string.IsNullOrWhiteSpace(name)))
+        {
+            var value = httpContext.Request.Headers[name].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(value))
+                return new ResolvedHeader(name, value);
+        }
 
-    private string ResolveResponseHeaderName()
-        => !string.IsNullOrWhiteSpace(_options.ResponseHeaderName)
-            ? _options.ResponseHeaderName
-            : _options.RequestHeaderNames.FirstOrDefault() ?? "Idempotency-Key";
+        return new ResolvedHeader(ResolveDefaultName(names, null), null);
+    }
+
+    private void AttachIdentityHeaders(HttpContext httpContext, SquirrelBoxIdentity identity)
+    {
+        AttachHeader(httpContext, ResolveIdempotencyHeaderName(identity), identity.Operation.IdempotencyKey?.Value);
+        AttachHeader(httpContext, identity.Operation.CorrelationId?.Name, identity.Operation.CorrelationId?.Value);
+        AttachHeader(httpContext, identity.Attempt.AttemptId?.Name, identity.Attempt.AttemptId?.Value);
+        AttachHeader(httpContext, identity.Attempt.TraceId?.Name, identity.Attempt.TraceId?.Value);
+    }
+
+    private string ResolveIdempotencyHeaderName(SquirrelBoxIdentity identity)
+        => !string.IsNullOrWhiteSpace(identity.Operation.IdempotencyKey?.Name)
+            ? identity.Operation.IdempotencyKey.Name
+            : !string.IsNullOrWhiteSpace(_options.ResponseHeaderName)
+                ? _options.ResponseHeaderName
+                : ResolveDefaultName(_options.RequestHeaderNames, SquirrelBoxMetadataNames.IdempotencyKey);
+
+    private static void AttachHeader(HttpContext httpContext, string name, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(value))
+            httpContext.Response.Headers[name] = value;
+    }
+
+    private static string ResolveDefaultName(IEnumerable<string> names, string fallback)
+        => names?.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? fallback;
+
+    private sealed record ResolvedHeader(string Name, string Value);
 }

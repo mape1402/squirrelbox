@@ -14,7 +14,7 @@ public interface IInboxMessageService
     ValueTask<InboxMessageOpenResult> OpenAsync(InboxMessageContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Attaches the current effective idempotency key to outgoing metadata when one is available.
+    /// Attaches the current effective SquirrelBox metadata to outgoing metadata when it is available.
     /// </summary>
     /// <param name="metadata">The outgoing metadata dictionary.</param>
     void AttachEffectiveKey(IDictionary<string, string> metadata);

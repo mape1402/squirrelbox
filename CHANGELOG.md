@@ -4,6 +4,24 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.3.0] - 2026-09-28
+
+### Added
+
+- Added SquirrelBox operation/attempt identity metadata with stable `IdempotencyKey` + `CorrelationId` and per-attempt `AttemptId` + `TraceId`.
+- Added default and replaceable `ICorrelationIdFactory`, `ITraceIdFactory`, and `IAttemptIdFactory` implementations.
+- Added `ISquirrelBoxIdentityAccessor` and scoped identity metadata exposure for services running inside an accepted inbox scope.
+- Added `SquirrelBoxMessageMetadata` and `ISquirrelBoxMessageMetadataEnricher` for transport-neutral messaging metadata propagation.
+- Added EF Core persistence for inbox attempt records so duplicate attempts keep their own trace and attempt ids while preserving the original operation correlation id.
+
+### Changed
+
+- Changed HTTP idempotency responses to propagate correlation id, attempt id, and trace id headers alongside the effective idempotency key.
+- Changed HTTP and messaging adapters to reuse incoming configured metadata/header names when returning effective identity values.
+- Changed messaging replies and Pigeon consume decisions to attach complete SquirrelBox metadata instead of only the idempotency key.
+- Changed Pigeon outbox interception to enrich persisted publish envelopes with the current SquirrelBox identity metadata.
+- Updated README guidance for identity metadata, custom factories, HTTP headers, messaging metadata, and Pigeon publish enrichment.
+
 ## [v2.2.1] - 2026-09-24
 
 ### Changed

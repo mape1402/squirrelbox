@@ -11,7 +11,27 @@ public sealed class SquirrelBoxMessagingOptions
     public IList<string> IdempotencyKeyMetadataNames { get; } = ["idempotency-key", "x-idempotency-key"];
 
     /// <summary>
-    /// Gets or sets the metadata name used to attach the effective idempotency key to replies.
+    /// Gets metadata names inspected for stable operation correlation ids.
+    /// </summary>
+    public IList<string> CorrelationIdMetadataNames { get; } = ["correlation-id", "x-correlation-id"];
+
+    /// <summary>
+    /// Gets metadata names inspected for per-attempt trace ids.
+    /// </summary>
+    public IList<string> TraceIdMetadataNames { get; } = ["trace-id", "x-trace-id", "traceparent"];
+
+    /// <summary>
+    /// Gets metadata name preferences used to attach per-attempt attempt ids.
+    /// </summary>
+    public IList<string> AttemptIdMetadataNames { get; } = ["attempt-id", "squirrelbox-attempt-id", "x-squirrelbox-attempt-id"];
+
+    /// <summary>
+    /// Gets or sets the metadata name used when the broker message id becomes the idempotency key.
+    /// </summary>
+    public string MessageIdMetadataName { get; set; } = "message-id";
+
+    /// <summary>
+    /// Gets or sets the fallback metadata name used to attach the effective idempotency key to replies.
     /// </summary>
     public string ReplyIdempotencyKeyMetadataName { get; set; } = "idempotency-key";
 

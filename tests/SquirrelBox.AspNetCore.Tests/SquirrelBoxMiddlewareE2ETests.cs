@@ -36,9 +36,21 @@ public sealed class SquirrelBoxMiddlewareE2ETests
 
         Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
         Assert.Equal("order-1", firstResponse.Headers.GetValues("Idempotency-Key").Single());
+        Assert.False(string.IsNullOrWhiteSpace(firstResponse.Headers.GetValues("Correlation-Id").Single()));
+        Assert.False(string.IsNullOrWhiteSpace(firstResponse.Headers.GetValues("SquirrelBox-Attempt-Id").Single()));
+        Assert.False(string.IsNullOrWhiteSpace(firstResponse.Headers.GetValues("Trace-Id").Single()));
         Assert.Equal("\"order-1\"", firstResponse.Headers.ETag?.Tag);
         Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
         Assert.Equal("order-1", duplicateResponse.Headers.GetValues("Idempotency-Key").Single());
+        Assert.Equal(
+            firstResponse.Headers.GetValues("Correlation-Id").Single(),
+            duplicateResponse.Headers.GetValues("Correlation-Id").Single());
+        Assert.NotEqual(
+            firstResponse.Headers.GetValues("SquirrelBox-Attempt-Id").Single(),
+            duplicateResponse.Headers.GetValues("SquirrelBox-Attempt-Id").Single());
+        Assert.NotEqual(
+            firstResponse.Headers.GetValues("Trace-Id").Single(),
+            duplicateResponse.Headers.GetValues("Trace-Id").Single());
         Assert.Equal("\"order-1\"", duplicateResponse.Headers.ETag?.Tag);
         Assert.Equal(firstBody, duplicateBody);
     }
@@ -54,6 +66,30 @@ public sealed class SquirrelBoxMiddlewareE2ETests
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("Idempotency-Key", out var values));
         Assert.False(string.IsNullOrWhiteSpace(values.Single()));
+        Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("Correlation-Id").Single()));
+        Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("SquirrelBox-Attempt-Id").Single()));
+        Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("Trace-Id").Single()));
+    }
+
+    [Fact]
+    public async Task Middleware_uses_incoming_header_names_when_propagating_identity()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/orders");
+        request.Headers.Add("X-Idempotency-Key", "order-custom");
+        request.Headers.Add("X-Correlation-Id", "corr-custom");
+        request.Headers.Add("X-Trace-Id", "trace-custom");
+        request.Content = JsonContent.Create(new OrderRequest("order-custom"));
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal("order-custom", response.Headers.GetValues("X-Idempotency-Key").Single());
+        Assert.Equal("corr-custom", response.Headers.GetValues("X-Correlation-Id").Single());
+        Assert.Equal("trace-custom", response.Headers.GetValues("X-Trace-Id").Single());
+        Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("SquirrelBox-Attempt-Id").Single()));
     }
 
     private static TestServer CreateServer()
