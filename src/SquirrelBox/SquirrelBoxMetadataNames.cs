@@ -6,6 +6,11 @@ namespace SquirrelBox;
 public static class SquirrelBoxMetadataNames
 {
     /// <summary>
+    /// Gets the metadata section name used to propagate the SquirrelBox metadata model.
+    /// </summary>
+    public const string MetadataSection = "SquirrelBoxMetadata";
+
+    /// <summary>
     /// Gets the default metadata name for idempotency keys.
     /// </summary>
     public const string IdempotencyKey = "idempotency-key";

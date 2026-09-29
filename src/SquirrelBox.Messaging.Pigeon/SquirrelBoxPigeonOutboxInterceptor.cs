@@ -71,10 +71,10 @@ public sealed class SquirrelBoxPigeonOutboxInterceptor : IPublishDecisionInterce
             Payload = envelope,
             PayloadType = typeof(PigeonPublishEnvelope),
             CorrelationId = string.IsNullOrWhiteSpace(envelope.CorrelationId)
-                ? metadata.CorrelationId?.Value
+                ? metadata.CorrelationId
                 : envelope.CorrelationId,
             TraceId = string.IsNullOrWhiteSpace(envelope.TraceId)
-                ? metadata.TraceId?.Value
+                ? metadata.TraceId
                 : envelope.TraceId
         };
 

@@ -81,14 +81,18 @@ public sealed class SquirrelBoxPigeonOutboxTests
             typeof(PigeonPublishEnvelope));
 
         Assert.Equal(PigeonPublishDecision.Skip, result.Decision);
-        Assert.Equal(opened.EffectiveIdempotencyKey, envelope.Metadata["idempotency-key"]);
-        Assert.Equal(opened.EffectiveCorrelationId, envelope.Metadata["correlation-id"]);
-        Assert.Equal(opened.EffectiveAttemptId, envelope.Metadata["attempt-id"]);
-        Assert.Equal(opened.EffectiveTraceId, envelope.Metadata["trace-id"]);
-        Assert.Equal(opened.EffectiveIdempotencyKey, publishEnvelope.Metadata["idempotency-key"]);
-        Assert.Equal(opened.EffectiveCorrelationId, publishEnvelope.Metadata["correlation-id"]);
-        Assert.Equal(opened.EffectiveAttemptId, publishEnvelope.Metadata["attempt-id"]);
-        Assert.Equal(opened.EffectiveTraceId, publishEnvelope.Metadata["trace-id"]);
+        var outboxMetadata = ReadSquirrelBoxMetadata(envelope.Metadata);
+        var publishMetadata = ReadSquirrelBoxMetadata(publishEnvelope.Metadata);
+        Assert.Equal(opened.EffectiveIdempotencyKey, outboxMetadata.IdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, outboxMetadata.CorrelationId);
+        Assert.Equal(opened.EffectiveAttemptId, outboxMetadata.AttemptId);
+        Assert.Equal(opened.EffectiveTraceId, outboxMetadata.TraceId);
+        Assert.Equal(opened.EffectiveIdempotencyKey, publishMetadata.IdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, publishMetadata.CorrelationId);
+        Assert.Equal(opened.EffectiveAttemptId, publishMetadata.AttemptId);
+        Assert.Equal(opened.EffectiveTraceId, publishMetadata.TraceId);
+        AssertNoFlatIdentityMetadata(envelope.Metadata);
+        AssertNoFlatIdentityMetadata(publishEnvelope.Metadata);
         Assert.Equal(opened.EffectiveCorrelationId, envelope.CorrelationId);
         Assert.Equal(opened.EffectiveTraceId, envelope.TraceId);
     }
@@ -112,6 +116,38 @@ public sealed class SquirrelBoxPigeonOutboxTests
         Assert.Equal("orders", published.Destination);
         Assert.Equal(typeof(OrderMessage).AssemblyQualifiedName, published.PayloadType);
         Assert.Equal(JsonSerializer.Serialize(new OrderMessage("order-1"), JsonOptions), Encoding.UTF8.GetString(published.Payload));
+    }
+
+    [Fact]
+    public async Task PigeonOutboxPublisher_restores_structured_metadata_from_outbox_envelope_when_publish_envelope_is_missing_it()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = CreatePublishEnvelope(isRaw: false);
+        var envelope = CreateEnvelope(outboxSerializer, publishEnvelope, typeof(PigeonPublishEnvelope));
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = "outbox-key",
+                CorrelationId = "outbox-correlation",
+                TraceId = "outbox-trace",
+                AttemptId = "outbox-attempt"
+            }
+        }.WriteTo(envelope.Metadata);
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        var result = await publisher.PublishAsync(envelope);
+        var invoker = provider.GetRequiredService<FakePigeonPublisherInvoker>();
+
+        Assert.True(result.Succeeded);
+        var published = Assert.Single(invoker.Published);
+        var metadata = ReadSquirrelBoxMetadata(published.Metadata);
+        Assert.Equal("outbox-key", metadata.IdempotencyKey);
+        Assert.Equal("outbox-correlation", metadata.CorrelationId);
+        Assert.Equal("outbox-trace", metadata.TraceId);
+        Assert.Equal("outbox-attempt", metadata.AttemptId);
+        AssertNoFlatIdentityMetadata(published.Metadata);
     }
 
     [Fact]
@@ -224,6 +260,25 @@ public sealed class SquirrelBoxPigeonOutboxTests
         };
 
     private sealed record OrderMessage(string Id);
+
+    private static SquirrelBoxMetadata ReadSquirrelBoxMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.True(SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata));
+        return squirrelBoxMetadata.Metadata;
+    }
+
+    private static void AssertNoFlatIdentityMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.DoesNotContain(metadata, item => IsFlatIdentityKey(item.Key));
+    }
+
+    private static bool IsFlatIdentityKey(string key)
+    {
+        return string.Equals(key, SquirrelBoxMetadataNames.IdempotencyKey, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.CorrelationId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.AttemptId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.TraceId, StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed class FakePigeonPublishEnvelopeFactory : IPigeonPublishEnvelopeFactory
     {

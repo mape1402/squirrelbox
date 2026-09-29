@@ -6,7 +6,7 @@ namespace SquirrelBox.Messaging.Tests;
 public sealed class InboxMessageServiceE2ETests
 {
     [Fact]
-    public async Task OpenAsync_uses_metadata_key_and_attaches_key_to_reply_metadata()
+    public async Task OpenAsync_uses_structured_metadata_and_attaches_section_to_reply_metadata()
     {
         var provider = CreateProvider();
 
@@ -20,10 +20,7 @@ public sealed class InboxMessageServiceE2ETests
             Subscription = "billing",
             Operation = "created",
             Payload = new OrderMessage("order-1"),
-            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["idempotency-key"] = "message-key"
-            }
+            Metadata = CreateSquirrelBoxMetadata("message-key")
         });
 
         var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -44,17 +41,16 @@ public sealed class InboxMessageServiceE2ETests
                 Subscription = "billing",
                 Operation = "created",
                 Payload = new OrderMessage("order-1"),
-                Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["idempotency-key"] = "message-key"
-                }
+                Metadata = CreateSquirrelBoxMetadata("message-key")
             });
 
         Assert.True(opened.ShouldExecute);
-        Assert.Equal("message-key", replyMetadata["idempotency-key"]);
-        Assert.Equal(openedCorrelationId, replyMetadata["correlation-id"]);
-        Assert.Equal(openedAttemptId, replyMetadata["attempt-id"]);
-        Assert.Equal(openedTraceId, replyMetadata["trace-id"]);
+        var reply = ReadSquirrelBoxMetadata(replyMetadata);
+        Assert.Equal("message-key", reply.IdempotencyKey);
+        Assert.Equal(openedCorrelationId, reply.CorrelationId);
+        Assert.Equal(openedAttemptId, reply.AttemptId);
+        Assert.Equal(openedTraceId, reply.TraceId);
+        AssertNoFlatIdentityMetadata(replyMetadata);
         Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.OpenResult.State);
         Assert.Equal("orders:v1/billing/created", duplicate.OpenResult.Entry.Operation);
         Assert.Equal(openedCorrelationId, duplicate.EffectiveCorrelationId);
@@ -84,14 +80,16 @@ public sealed class InboxMessageServiceE2ETests
 
         Assert.Equal(InboxOpenState.Opened, opened.OpenResult.State);
         Assert.Equal(InboxIdempotencyKeySource.ComputedFromPayload, opened.OpenResult.IdempotencyKeySource);
-        Assert.Equal(opened.EffectiveIdempotencyKey, replyMetadata["idempotency-key"]);
-        Assert.Equal(opened.EffectiveCorrelationId, replyMetadata["correlation-id"]);
-        Assert.Equal(opened.EffectiveAttemptId, replyMetadata["attempt-id"]);
-        Assert.Equal(opened.EffectiveTraceId, replyMetadata["trace-id"]);
+        var reply = ReadSquirrelBoxMetadata(replyMetadata);
+        Assert.Equal(opened.EffectiveIdempotencyKey, reply.IdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, reply.CorrelationId);
+        Assert.Equal(opened.EffectiveAttemptId, reply.AttemptId);
+        Assert.Equal(opened.EffectiveTraceId, reply.TraceId);
+        AssertNoFlatIdentityMetadata(replyMetadata);
     }
 
     [Fact]
-    public async Task OpenAsync_preserves_custom_metadata_names_for_identity_propagation()
+    public async Task OpenAsync_preserves_structured_metadata_values_for_identity_propagation()
     {
         var provider = CreateProvider();
         using var scope = provider.CreateScope();
@@ -105,24 +103,59 @@ public sealed class InboxMessageServiceE2ETests
             Subscription = "billing",
             Operation = "created",
             Payload = new OrderMessage("order-custom"),
+            Metadata = CreateSquirrelBoxMetadata(
+                idempotencyKey: "custom-key",
+                correlationId: "corr-custom",
+                traceId: "trace-custom")
+        });
+
+        var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        service.AttachEffectiveKey(replyMetadata);
+        var reply = ReadSquirrelBoxMetadata(replyMetadata);
+
+        Assert.Equal("custom-key", opened.EffectiveMetadata.IdempotencyKey);
+        Assert.Equal("corr-custom", opened.EffectiveMetadata.CorrelationId);
+        Assert.Equal("trace-custom", opened.EffectiveMetadata.TraceId);
+        Assert.Equal("custom-key", reply.IdempotencyKey);
+        Assert.Equal("corr-custom", reply.CorrelationId);
+        Assert.Equal("trace-custom", reply.TraceId);
+        Assert.Equal(opened.EffectiveAttemptId, reply.AttemptId);
+        AssertNoFlatIdentityMetadata(replyMetadata);
+    }
+
+    [Fact]
+    public async Task OpenAsync_ignores_flat_identity_metadata_when_structured_section_is_missing()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            Payload = new OrderMessage("order-flat"),
             Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["x-idempotency-key"] = "custom-key",
-                ["x-correlation-id"] = "corr-custom",
-                ["x-trace-id"] = "trace-custom"
+                ["idempotency-key"] = "flat-key",
+                ["correlation-id"] = "flat-correlation",
+                ["trace-id"] = "flat-trace"
             }
         });
 
         var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         service.AttachEffectiveKey(replyMetadata);
+        var reply = ReadSquirrelBoxMetadata(replyMetadata);
 
-        Assert.Equal("custom-key", opened.EffectiveMetadata.IdempotencyKey.Value);
-        Assert.Equal("corr-custom", opened.EffectiveMetadata.CorrelationId.Value);
-        Assert.Equal("trace-custom", opened.EffectiveMetadata.TraceId.Value);
-        Assert.Equal("custom-key", replyMetadata["x-idempotency-key"]);
-        Assert.Equal("corr-custom", replyMetadata["x-correlation-id"]);
-        Assert.Equal("trace-custom", replyMetadata["x-trace-id"]);
-        Assert.Equal(opened.EffectiveAttemptId, replyMetadata["attempt-id"]);
+        Assert.Equal(InboxIdempotencyKeySource.ComputedFromPayload, opened.OpenResult.IdempotencyKeySource);
+        Assert.NotEqual("flat-key", opened.EffectiveIdempotencyKey);
+        Assert.NotEqual("flat-correlation", opened.EffectiveCorrelationId);
+        Assert.NotEqual("flat-trace", opened.EffectiveTraceId);
+        Assert.Equal(opened.EffectiveIdempotencyKey, reply.IdempotencyKey);
+        AssertNoFlatIdentityMetadata(replyMetadata);
     }
 
     private static ServiceProvider CreateProvider()
@@ -131,6 +164,46 @@ public sealed class InboxMessageServiceE2ETests
         services.AddSquirrelBox().UseInMemory();
         services.AddSquirrelBoxMessaging();
         return services.BuildServiceProvider();
+    }
+
+    private static Dictionary<string, string> CreateSquirrelBoxMetadata(
+        string idempotencyKey,
+        string correlationId = null,
+        string traceId = null,
+        string attemptId = null)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = idempotencyKey,
+                CorrelationId = correlationId,
+                TraceId = traceId,
+                AttemptId = attemptId
+            }
+        }.WriteTo(metadata);
+
+        return metadata;
+    }
+
+    private static SquirrelBoxMetadata ReadSquirrelBoxMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.True(SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata));
+        return squirrelBoxMetadata.Metadata;
+    }
+
+    private static void AssertNoFlatIdentityMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.DoesNotContain(metadata, item => IsFlatIdentityKey(item.Key));
+    }
+
+    private static bool IsFlatIdentityKey(string key)
+    {
+        return string.Equals(key, SquirrelBoxMetadataNames.IdempotencyKey, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.CorrelationId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.AttemptId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.TraceId, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record OrderMessage(string Id);
