@@ -417,15 +417,22 @@ The default operation shape is:
 topic:version/subscription/operation
 ```
 
-`AttachEffectiveKey` is kept for compatibility, but it now writes the complete
-`SquirrelBoxMessageMetadata` model into outgoing metadata:
+`AttachEffectiveKey` writes the complete SquirrelBox identity as one structured metadata section:
 
-```text
-idempotency-key
-correlation-id
-attempt-id
-trace-id
+```json
+{
+  "SquirrelBoxMetadata": {
+    "idempotencyKey": "orders:...",
+    "correlationId": "01K...",
+    "traceId": "01K...",
+    "attemptId": "01K..."
+  }
+}
 ```
+
+Messaging adapters read only the `SquirrelBoxMetadata` section for SquirrelBox identity propagation.
+Broker metadata such as `message-id` can still be used as a fallback idempotency source when configured,
+and payload hashing remains the final fallback when enabled.
 
 Adapters can use `ISquirrelBoxMessageMetadataEnricher` directly when they need to attach the
 current identity to replies, orchestration metadata, or outgoing messages without depending on
@@ -457,7 +464,7 @@ Publish:
 
 - Publish decision interceptor persists Pigeon's prepared `PigeonPublishEnvelope` in SquirrelBox Outbox.
 - Pigeon publish is skipped inline after the envelope is durable.
-- Outgoing Pigeon envelopes are enriched with the current SquirrelBox idempotency key, correlation id, attempt id, and trace id when a current inbox identity exists.
+- Outgoing Pigeon envelopes are enriched with a single `SquirrelBoxMetadata` section when a current inbox identity exists.
 - Mule later publishes through `IPigeonPublisherInvoker` without rerunning producer interceptors, publish decision interceptors, or Pigeon's internal outbox logic.
 - Normal and raw publish flows are supported.
 
@@ -473,7 +480,7 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 ```
 
-SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, and `idempotency-key`.
+SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, and the structured `SquirrelBoxMetadata` section.
 
 ## Sample
 

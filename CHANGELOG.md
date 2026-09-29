@@ -4,6 +4,17 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v3.0.0] - 2026-09-29
+
+### Added
+
+- Added the transport-neutral `SquirrelBoxMetadata` model and the `SquirrelBoxMetadata` messaging section for identity propagation.
+
+### Changed
+
+- Changed `SquirrelBox.Messaging` and `SquirrelBox.Messaging.Pigeon` to read and write SquirrelBox identity metadata as one structured section instead of separate flat metadata keys.
+- Changed Pigeon outbox replay to restore the structured `SquirrelBoxMetadata` section from the durable outbox envelope when publishing through Pigeon.
+
 ## [v2.4.0] - 2026-09-29
 
 ### Added

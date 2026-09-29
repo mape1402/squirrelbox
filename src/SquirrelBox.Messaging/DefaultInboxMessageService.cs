@@ -42,9 +42,10 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
         var metadata = context.Metadata is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(context.Metadata, StringComparer.OrdinalIgnoreCase);
-        var idempotencyKey = ResolveIdempotencyKey(context, metadata);
-        var correlationId = ResolveCorrelationId(context, metadata);
-        var traceId = ResolveTraceId(context, metadata);
+        SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata);
+        var idempotencyKey = ResolveIdempotencyKey(context, squirrelBoxMetadata);
+        var correlationId = ResolveCorrelationId(context, squirrelBoxMetadata);
+        var traceId = ResolveTraceId(context, squirrelBoxMetadata);
 
         var request = new InboxOpenRequest
         {
@@ -58,7 +59,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             CorrelationIdName = correlationId.Name,
             TraceId = traceId.Value,
             TraceIdName = traceId.Name,
-            AttemptIdName = ResolveDefaultName(_options.AttemptIdMetadataNames, SquirrelBoxMetadataNames.AttemptId),
+            AttemptIdName = SquirrelBoxMetadataNames.MetadataSection,
             Owner = "messaging",
             ExecutionMode = context.ExecutionMode ?? _options.ExecutionModeResolver?.Invoke(context),
             AllowPayloadHashAsIdempotencyKey = _options.AllowPayloadHashAsIdempotencyKey,
@@ -89,20 +90,18 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
 
         var messageMetadata = _metadataEnricher.Create(identity);
         messageMetadata.WriteTo(metadata);
-
-        if (messageMetadata.IdempotencyKey is null &&
-            _inbox.LastContext.EffectiveIdempotencyKey is { Length: > 0 } key)
-        {
-            metadata[_options.ReplyIdempotencyKeyMetadataName] = key;
-        }
     }
 
     private ResolvedMetadata ResolveIdempotencyKey(
         InboxMessageContext context,
-        IReadOnlyDictionary<string, string> metadata)
+        SquirrelBoxMessageMetadata metadata)
     {
-        if (ResolveMetadata(metadata, _options.IdempotencyKeyMetadataNames, SquirrelBoxMetadataNames.IdempotencyKey) is { } explicitKey)
-            return explicitKey;
+        if (!string.IsNullOrWhiteSpace(metadata?.IdempotencyKey))
+        {
+            return new ResolvedMetadata(
+                SquirrelBoxMetadataNames.MetadataSection,
+                metadata.IdempotencyKey);
+        }
 
         if (_options.UseMessageIdWhenKeyIsMissing && !string.IsNullOrWhiteSpace(context.MessageId))
         {
@@ -115,66 +114,45 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
         if (_options.UseCorrelationIdWhenKeyIsMissing && !string.IsNullOrWhiteSpace(context.CorrelationId))
         {
             return new ResolvedMetadata(
-                ResolveDefaultName(_options.CorrelationIdMetadataNames, SquirrelBoxMetadataNames.CorrelationId),
+                SquirrelBoxMetadataNames.MetadataSection,
                 context.CorrelationId);
         }
 
         return new ResolvedMetadata(
-            ResolveDefaultName(_options.IdempotencyKeyMetadataNames, SquirrelBoxMetadataNames.IdempotencyKey),
+            SquirrelBoxMetadataNames.MetadataSection,
             null);
     }
 
     private ResolvedMetadata ResolveCorrelationId(
         InboxMessageContext context,
-        IReadOnlyDictionary<string, string> metadata)
+        SquirrelBoxMessageMetadata metadata)
     {
-        if (ResolveMetadata(metadata, _options.CorrelationIdMetadataNames, SquirrelBoxMetadataNames.CorrelationId) is { } correlationId)
-            return correlationId;
+        if (!string.IsNullOrWhiteSpace(metadata?.CorrelationId))
+        {
+            return new ResolvedMetadata(
+                SquirrelBoxMetadataNames.MetadataSection,
+                metadata.CorrelationId);
+        }
 
         return new ResolvedMetadata(
-            ResolveDefaultName(_options.CorrelationIdMetadataNames, SquirrelBoxMetadataNames.CorrelationId),
+            SquirrelBoxMetadataNames.MetadataSection,
             context.CorrelationId);
     }
 
     private ResolvedMetadata ResolveTraceId(
         InboxMessageContext context,
-        IReadOnlyDictionary<string, string> metadata)
+        SquirrelBoxMessageMetadata metadata)
     {
-        if (ResolveMetadata(metadata, _options.TraceIdMetadataNames, SquirrelBoxMetadataNames.TraceId) is { } traceId)
-            return traceId;
+        if (!string.IsNullOrWhiteSpace(metadata?.TraceId))
+        {
+            return new ResolvedMetadata(
+                SquirrelBoxMetadataNames.MetadataSection,
+                metadata.TraceId);
+        }
 
         return new ResolvedMetadata(
-            ResolveDefaultName(_options.TraceIdMetadataNames, SquirrelBoxMetadataNames.TraceId),
+            SquirrelBoxMetadataNames.MetadataSection,
             context.TraceId);
-    }
-
-    private static ResolvedMetadata ResolveMetadata(
-        IReadOnlyDictionary<string, string> metadata,
-        IEnumerable<string> names,
-        string fallbackName)
-    {
-        foreach (var name in names)
-        {
-            if (!string.IsNullOrWhiteSpace(name) &&
-                metadata.TryGetValue(name, out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                return new ResolvedMetadata(name, value);
-            }
-        }
-
-        return null;
-    }
-
-    private static string ResolveDefaultName(IEnumerable<string> names, string fallbackName)
-    {
-        foreach (var name in names)
-        {
-            if (!string.IsNullOrWhiteSpace(name))
-                return name;
-        }
-
-        return fallbackName;
     }
 
     private sealed record ResolvedMetadata(string Name, string Value);

@@ -36,7 +36,7 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var publishEnvelope = DeserializePublishEnvelope(envelope);
+        var publishEnvelope = WithDurableMetadata(DeserializePublishEnvelope(envelope), envelope);
         await _publisherInvoker.PublishAsync(publishEnvelope, cancellationToken);
         return OutboxPublishResult.Success;
     }
@@ -91,6 +91,47 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
             TraceId = envelope.TraceId,
             IsRaw = payload.IsRaw
         };
+
+    private static PigeonPublishEnvelope WithDurableMetadata(
+        PigeonPublishEnvelope publishEnvelope,
+        OutboxEnvelope outboxEnvelope)
+    {
+        if (publishEnvelope is null ||
+            outboxEnvelope?.Metadata is null ||
+            !outboxEnvelope.Metadata.TryGetValue(SquirrelBoxMetadataNames.MetadataSection, out var value) ||
+            string.IsNullOrWhiteSpace(value))
+        {
+            return publishEnvelope;
+        }
+
+        var metadata = publishEnvelope.Metadata is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(publishEnvelope.Metadata, StringComparer.OrdinalIgnoreCase);
+
+        if (metadata.ContainsKey(SquirrelBoxMetadataNames.MetadataSection))
+            return publishEnvelope;
+
+        metadata[SquirrelBoxMetadataNames.MetadataSection] = value;
+
+        return new PigeonPublishEnvelope
+        {
+            Transport = publishEnvelope.Transport,
+            Topic = publishEnvelope.Topic,
+            Version = publishEnvelope.Version,
+            Operation = publishEnvelope.Operation,
+            Destination = publishEnvelope.Destination,
+            Exchange = publishEnvelope.Exchange,
+            RoutingKey = publishEnvelope.RoutingKey,
+            ContentType = publishEnvelope.ContentType,
+            Payload = publishEnvelope.Payload,
+            PayloadType = publishEnvelope.PayloadType,
+            Headers = publishEnvelope.Headers,
+            Metadata = metadata,
+            CorrelationId = publishEnvelope.CorrelationId,
+            TraceId = publishEnvelope.TraceId,
+            IsRaw = publishEnvelope.IsRaw
+        };
+    }
 
     private static string ResolveMetadata(OutboxEnvelope envelope, string key)
         => envelope.Metadata.TryGetValue(key, out var value)

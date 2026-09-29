@@ -26,12 +26,16 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.NotNull(inbox.Current);
         Assert.Equal("pigeon-key", inbox.Current.EffectiveIdempotencyKey);
         Assert.Equal("orders:1.2.0/billing/OrderMessage", inbox.Current.Entry.Operation);
-        Assert.Equal("pigeon-key", context.ReplyMetadata["idempotency-key"]);
-        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyMetadata["correlation-id"]);
-        Assert.Equal(inbox.Current.Entry.LastAttemptId, context.ReplyMetadata["attempt-id"]);
-        Assert.Equal(inbox.Current.Entry.LastTraceId, context.ReplyMetadata["trace-id"]);
-        Assert.Equal("pigeon-key", context.ReplyHeaders["idempotency-key"]);
-        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyHeaders["correlation-id"]);
+        var replyMetadata = ReadSquirrelBoxMetadata(context.ReplyMetadata);
+        var replyHeaders = ReadSquirrelBoxMetadata(context.ReplyHeaders);
+        Assert.Equal("pigeon-key", replyMetadata.IdempotencyKey);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, replyMetadata.CorrelationId);
+        Assert.Equal(inbox.Current.Entry.LastAttemptId, replyMetadata.AttemptId);
+        Assert.Equal(inbox.Current.Entry.LastTraceId, replyMetadata.TraceId);
+        Assert.Equal("pigeon-key", replyHeaders.IdempotencyKey);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, replyHeaders.CorrelationId);
+        AssertNoFlatIdentityMetadata(context.ReplyMetadata);
+        AssertNoFlatIdentityMetadata(context.ReplyHeaders);
     }
 
     [Fact]
@@ -93,13 +97,17 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Single(scheduler.Payloads);
         var envelope = Assert.IsType<PigeonConsumeEnvelope>(scheduler.Payloads.Single());
         Assert.Equal("orders", envelope.Topic);
-        Assert.Equal("pigeon-key", envelope.Metadata["idempotency-key"]);
-        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["correlation-id"]));
-        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["attempt-id"]));
-        Assert.False(string.IsNullOrWhiteSpace(envelope.Metadata["trace-id"]));
-        Assert.Equal(envelope.Metadata["correlation-id"], result.Metadata["correlation-id"]);
-        Assert.Equal(envelope.Metadata["attempt-id"], result.Metadata["attempt-id"]);
-        Assert.Equal(envelope.Metadata["trace-id"], result.Metadata["trace-id"]);
+        var envelopeMetadata = ReadSquirrelBoxMetadata(envelope.Metadata);
+        var resultMetadata = ReadSquirrelBoxMetadata(result.Metadata);
+        Assert.Equal("pigeon-key", envelopeMetadata.IdempotencyKey);
+        Assert.False(string.IsNullOrWhiteSpace(envelopeMetadata.CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(envelopeMetadata.AttemptId));
+        Assert.False(string.IsNullOrWhiteSpace(envelopeMetadata.TraceId));
+        Assert.Equal(envelopeMetadata.CorrelationId, resultMetadata.CorrelationId);
+        Assert.Equal(envelopeMetadata.AttemptId, resultMetadata.AttemptId);
+        Assert.Equal(envelopeMetadata.TraceId, resultMetadata.TraceId);
+        AssertNoFlatIdentityMetadata(envelope.Metadata);
+        AssertNoFlatIdentityMetadata(result.Metadata);
         Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
     }
 
@@ -136,10 +144,12 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(PigeonConsumeDecision.Continue, result.Decision);
         Assert.Empty(scope.ServiceProvider.GetRequiredService<FakeInboxMuleScheduler>().Payloads);
         Assert.Equal("pigeon-key", inbox.Current.EffectiveIdempotencyKey);
-        Assert.Equal("pigeon-key", context.ReplyMetadata["idempotency-key"]);
-        Assert.Equal(inbox.Current.Entry.CorrelationId, context.ReplyMetadata["correlation-id"]);
-        Assert.Equal(inbox.Current.Entry.LastAttemptId, context.ReplyMetadata["attempt-id"]);
-        Assert.Equal(inbox.Current.Entry.LastTraceId, context.ReplyMetadata["trace-id"]);
+        var replyMetadata = ReadSquirrelBoxMetadata(context.ReplyMetadata);
+        Assert.Equal("pigeon-key", replyMetadata.IdempotencyKey);
+        Assert.Equal(inbox.Current.Entry.CorrelationId, replyMetadata.CorrelationId);
+        Assert.Equal(inbox.Current.Entry.LastAttemptId, replyMetadata.AttemptId);
+        Assert.Equal(inbox.Current.Entry.LastTraceId, replyMetadata.TraceId);
+        AssertNoFlatIdentityMetadata(context.ReplyMetadata);
     }
 
     [Fact]
@@ -275,14 +285,47 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             Message = new OrderMessage("order-1"),
             MessageType = typeof(OrderMessage),
             ExecutionSource = executionSource,
-            RawMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["idempotency-key"] = "pigeon-key",
-                ["message-id"] = "broker-id"
-            }
+            RawMetadata = CreateRawMetadata("pigeon-key")
         };
 
     private sealed record OrderMessage(string Id);
+
+    private static Dictionary<string, string> CreateRawMetadata(string idempotencyKey)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["message-id"] = "broker-id"
+        };
+
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = idempotencyKey
+            }
+        }.WriteTo(metadata);
+
+        return metadata;
+    }
+
+    private static SquirrelBoxMetadata ReadSquirrelBoxMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.True(SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata));
+        return squirrelBoxMetadata.Metadata;
+    }
+
+    private static void AssertNoFlatIdentityMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
+    {
+        Assert.DoesNotContain(metadata, item => IsFlatIdentityKey(item.Key));
+    }
+
+    private static bool IsFlatIdentityKey(string key)
+    {
+        return string.Equals(key, SquirrelBoxMetadataNames.IdempotencyKey, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.CorrelationId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.AttemptId, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, SquirrelBoxMetadataNames.TraceId, StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed class FakePigeonConsumeEnvelopeFactory : IPigeonConsumeEnvelopeFactory
     {
