@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace SquirrelBox.AspNetCore;
 
@@ -24,46 +26,25 @@ public static class SquirrelBoxHttpContextExtensions
         IInboxService inbox,
         TPayload payload,
         string operation = null,
-        string source = "http",
+        string source = null,
         InboxExecutionMode? executionMode = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(inbox);
 
-        var idempotencyKey = ResolveHeader(httpContext, "Idempotency-Key", "X-Idempotency-Key");
-        var correlationId = ResolveHeader(httpContext, "Correlation-Id", "X-Correlation-Id");
-        var traceId = ResolveHeader(httpContext, "Trace-Id", "X-Trace-Id", "traceparent");
+        var options = httpContext.RequestServices
+            .GetService<IOptions<SquirrelBoxAspNetCoreOptions>>()?.Value
+            ?? new SquirrelBoxAspNetCoreOptions();
 
-        return inbox.OpenOrContinueAsync(new InboxOpenRequest
-        {
-            Source = source,
-            Operation = operation ?? $"{httpContext.Request.Method.ToUpperInvariant()} {httpContext.Request.Path.Value}",
-            IdempotencyKey = idempotencyKey.Value,
-            IdempotencyKeyName = idempotencyKey.Name,
-            Payload = payload,
-            PayloadType = typeof(TPayload).AssemblyQualifiedName,
-            CorrelationId = correlationId.Value,
-            CorrelationIdName = correlationId.Name,
-            TraceId = string.IsNullOrWhiteSpace(traceId.Value) ? httpContext.TraceIdentifier : traceId.Value,
-            TraceIdName = traceId.Name,
-            AttemptIdName = "SquirrelBox-Attempt-Id",
-            Owner = "aspnetcore-endpoint",
-            ExecutionMode = executionMode
-        }, cancellationToken);
+        return inbox.OpenOrContinueAsync(
+            SquirrelBoxHttpInbox.CreateOpenRequest(
+                httpContext,
+                options,
+                payload,
+                operation,
+                source,
+                executionMode: executionMode),
+            cancellationToken);
     }
-
-    private static ResolvedHeader ResolveHeader(HttpContext httpContext, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            var value = httpContext.Request.Headers[name].FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(value))
-                return new ResolvedHeader(name, value);
-        }
-
-        return new ResolvedHeader(names.FirstOrDefault(), null);
-    }
-
-    private sealed record ResolvedHeader(string Name, string Value);
 }
