@@ -12,29 +12,39 @@ public sealed record InboxMessageOpenResult(
     SquirrelBoxMessageMetadata Metadata = null)
 {
     /// <summary>
+    /// Gets a disabled result used when no messaging inbox policy applies.
+    /// </summary>
+    public static InboxMessageOpenResult Disabled { get; } = new(null, null, SquirrelBoxMessageMetadata.Empty);
+
+    /// <summary>
+    /// Gets a value indicating whether inbox idempotency was enabled for the message.
+    /// </summary>
+    public bool Enabled => OpenResult is not null;
+
+    /// <summary>
     /// Gets a value indicating whether the consumer should execute the message handler.
     /// </summary>
-    public bool ShouldExecute => Decision.ShouldExecute;
+    public bool ShouldExecute => !Enabled || Decision.ShouldExecute;
 
     /// <summary>
     /// Gets the effective idempotency key that should be propagated to replies.
     /// </summary>
-    public string EffectiveIdempotencyKey => Decision.EffectiveIdempotencyKey;
+    public string EffectiveIdempotencyKey => Decision?.EffectiveIdempotencyKey;
 
     /// <summary>
     /// Gets the effective correlation id that should be propagated to replies.
     /// </summary>
-    public string EffectiveCorrelationId => OpenResult.EffectiveCorrelationId;
+    public string EffectiveCorrelationId => OpenResult?.EffectiveCorrelationId;
 
     /// <summary>
     /// Gets the effective attempt id that should be propagated to replies.
     /// </summary>
-    public string EffectiveAttemptId => OpenResult.EffectiveAttemptId;
+    public string EffectiveAttemptId => OpenResult?.EffectiveAttemptId;
 
     /// <summary>
     /// Gets the effective trace id that should be propagated to replies.
     /// </summary>
-    public string EffectiveTraceId => OpenResult.EffectiveTraceId;
+    public string EffectiveTraceId => OpenResult?.EffectiveTraceId;
 
     /// <summary>
     /// Gets the effective SquirrelBox messaging metadata.

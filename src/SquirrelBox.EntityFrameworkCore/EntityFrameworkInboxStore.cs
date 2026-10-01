@@ -193,15 +193,21 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         var entry = ToEntry(existing);
         InboxOpenState state;
 
-        if (entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= incoming.CreatedOnUtc)
-        {
-            state = InboxOpenState.Expired;
-        }
-        else if (!string.IsNullOrWhiteSpace(entry.PayloadHash) &&
-                 !string.IsNullOrWhiteSpace(incoming.PayloadHash) &&
-                 !string.Equals(entry.PayloadHash, incoming.PayloadHash, StringComparison.Ordinal))
+        var isExpired = IsExpired(entry, incoming.CreatedOnUtc);
+        var completedForever = IsCompletedForever(entry);
+
+        if ((!isExpired || completedForever) &&
+            !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
+            !string.IsNullOrWhiteSpace(incoming.PayloadHash) &&
+            !string.Equals(entry.PayloadHash, incoming.PayloadHash, StringComparison.Ordinal))
         {
             state = InboxOpenState.PayloadConflict;
+        }
+        else if (ShouldReopen(entry, isExpired))
+        {
+            state = InboxOpenState.Opened;
+            Reopen(existing, incoming, preserveCorrelation: entry.Status is InboxStatus.Failed && !isExpired);
+            entry = ToEntry(existing);
         }
         else
         {
@@ -234,6 +240,49 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             _ => InboxOpenState.DuplicateInProgress
         };
 
+    private static bool IsExpired(InboxEntry entry, DateTimeOffset now)
+        => entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= now;
+
+    private static bool IsCompletedForever(InboxEntry entry)
+        => entry.Status is InboxStatus.Completed &&
+           entry.CompletedLock is InboxCompletedLockMode.Forever;
+
+    private static bool ShouldReopen(InboxEntry entry, bool isExpired)
+        => entry.Status is InboxStatus.Failed ||
+           (isExpired && !IsCompletedForever(entry));
+
+    private static void Reopen(
+        SquirrelBoxInboxEntryRecord existing,
+        InboxEntry incoming,
+        bool preserveCorrelation)
+    {
+        var correlationId = preserveCorrelation ? existing.CorrelationId : incoming.CorrelationId;
+        var correlationIdName = preserveCorrelation ? existing.CorrelationIdName : incoming.CorrelationIdName;
+        var correlationIdSource = preserveCorrelation ? existing.CorrelationIdSource : incoming.CorrelationIdSource.ToString();
+
+        existing.IdempotencyKeyName = incoming.IdempotencyKeyName;
+        existing.IdempotencyKeySource = incoming.IdempotencyKeySource.ToString();
+        existing.PayloadHash = incoming.PayloadHash;
+        existing.PayloadType = incoming.PayloadType;
+        existing.CorrelationId = correlationId;
+        existing.CorrelationIdName = correlationIdName;
+        existing.CorrelationIdSource = correlationIdSource;
+        existing.OriginalAttemptId = incoming.CurrentAttempt?.AttemptId;
+        existing.OriginalTraceId = incoming.CurrentAttempt?.TraceId;
+        existing.Status = InboxStatus.Started.ToString();
+        existing.ExecutionMode = incoming.ExecutionMode.ToString();
+        existing.PolicyName = incoming.PolicyName;
+        existing.CompletedLock = ResolveCompletedLock(incoming.CompletedLock).ToString();
+        existing.CreatedOnUtc = incoming.CreatedOnUtc;
+        existing.UpdatedOnUtc = incoming.UpdatedOnUtc;
+        existing.CompletedOnUtc = null;
+        existing.ExpiresOnUtc = incoming.ExpiresOnUtc;
+        existing.Failure = null;
+        existing.CompletionJson = null;
+        existing.FailureDetailsJson = null;
+        existing.MetadataJson = Serialize(incoming.Metadata);
+    }
+
     private static SquirrelBoxInboxEntryRecord ToRecord(InboxEntry entry)
         => new()
         {
@@ -254,6 +303,8 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             LastTraceId = entry.LastTraceId,
             Status = entry.Status.ToString(),
             ExecutionMode = entry.ExecutionMode.ToString(),
+            PolicyName = entry.PolicyName,
+            CompletedLock = ResolveCompletedLock(entry.CompletedLock).ToString(),
             CreatedOnUtc = entry.CreatedOnUtc,
             UpdatedOnUtc = entry.UpdatedOnUtc,
             CompletedOnUtc = entry.CompletedOnUtc,
@@ -284,6 +335,8 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             LastTraceId = record.LastTraceId,
             Status = Enum.Parse<InboxStatus>(record.Status),
             ExecutionMode = Enum.Parse<InboxExecutionMode>(record.ExecutionMode),
+            PolicyName = record.PolicyName,
+            CompletedLock = ParseCompletedLock(record.CompletedLock),
             CreatedOnUtc = record.CreatedOnUtc,
             UpdatedOnUtc = record.UpdatedOnUtc,
             CompletedOnUtc = record.CompletedOnUtc,
@@ -330,6 +383,16 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         => string.IsNullOrWhiteSpace(value)
             ? SquirrelBoxMetadataValueSource.Missing
             : Enum.Parse<SquirrelBoxMetadataValueSource>(value);
+
+    private static InboxCompletedLockMode ResolveCompletedLock(InboxCompletedLockMode value)
+        => value is InboxCompletedLockMode.Default
+            ? InboxCompletedLockMode.UntilExpiration
+            : value;
+
+    private static InboxCompletedLockMode ParseCompletedLock(string value)
+        => string.IsNullOrWhiteSpace(value)
+            ? InboxCompletedLockMode.UntilExpiration
+            : ResolveCompletedLock(Enum.Parse<InboxCompletedLockMode>(value));
 
     private static string Serialize<T>(T value)
         => value is null ? null : JsonSerializer.Serialize(value, JsonOptions);

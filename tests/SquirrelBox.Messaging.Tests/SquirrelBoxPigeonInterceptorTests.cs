@@ -12,6 +12,21 @@ namespace SquirrelBox.Messaging.Tests;
 public sealed class SquirrelBoxPigeonInterceptorTests
 {
     [Fact]
+    public async Task DecisionInterceptor_continues_without_opening_inbox_when_no_profile_matches()
+    {
+        using var provider = CreateProvider(scanProfiles: false);
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(scope.ServiceProvider);
+
+        var decision = await interceptor.InterceptAsync(context);
+
+        Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
+        Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
+        Assert.False(context.ReplyMetadata.ContainsKey(SquirrelBoxMetadataNames.MetadataSection));
+    }
+
+    [Fact]
     public async Task DecisionInterceptor_opens_inbox_and_continues_inline_consume()
     {
         using var provider = CreateProvider();
@@ -251,11 +266,15 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(SemanticVersion.Parse("1.2.3"), fakeInvoker.Envelopes.Single().Version);
     }
 
-    private static ServiceProvider CreateProvider(Action<SquirrelBoxPigeonOptions> configure = null)
+    private static ServiceProvider CreateProvider(Action<SquirrelBoxPigeonOptions> configure = null, bool scanProfiles = true)
     {
         var services = new ServiceCollection();
         services.AddSquirrelBox().UseInMemory();
-        services.AddSquirrelBoxMessaging();
+        services.AddSquirrelBoxMessaging(options =>
+        {
+            if (scanProfiles)
+                options.ScanAssemblyContaining<SquirrelBoxPigeonInterceptorTests>();
+        });
         services.AddSingleton<FakeInboxMuleScheduler>();
         services.AddSingleton<IInboxMuleScheduler>(provider => provider.GetRequiredService<FakeInboxMuleScheduler>());
         services.AddSingleton<FakePigeonConsumerInvoker>();
@@ -411,4 +430,10 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             return ValueTask.CompletedTask;
         }
     }
+}
+
+public sealed class SquirrelBoxPigeonTestPolicyProfile : InboxMessagePolicyProfile
+{
+    public override void Configure(InboxMessagePolicyProfileBuilder builder)
+        => builder.ForTopic("orders");
 }

@@ -7,6 +7,7 @@ internal static class SquirrelBoxPayloadFilterExecutor
     public static async ValueTask<bool> TryAcceptAsync(
         HttpContext httpContext,
         object payload,
+        ISquirrelBoxPayloadMetadata metadata,
         IInboxService inbox,
         IInboxPolicyResolver policyResolver,
         SquirrelBoxAspNetCoreOptions options)
@@ -22,7 +23,7 @@ internal static class SquirrelBoxPayloadFilterExecutor
         SquirrelBoxHttpInbox.EnsureIdentityHeadersOnStarting(httpContext, inbox, options);
 
         var open = await inbox.OpenOrContinueAsync(
-            SquirrelBoxHttpInbox.CreateOpenRequest(httpContext, options, payload),
+            SquirrelBoxHttpInbox.CreateOpenRequest(httpContext, options, payload, payloadMetadata: metadata),
             httpContext.RequestAborted);
         var decision = policyResolver.Resolve(open);
 

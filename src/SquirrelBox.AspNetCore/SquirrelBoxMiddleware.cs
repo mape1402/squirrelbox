@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 namespace SquirrelBox.AspNetCore;
 
 /// <summary>
-/// ASP.NET Core middleware that opens SquirrelBox inbox contexts from HTTP idempotency headers.
+/// ASP.NET Core middleware that completes SquirrelBox inbox contexts opened by explicit HTTP entrypoints.
 /// </summary>
 public sealed class SquirrelBoxMiddleware
 {
@@ -35,41 +35,9 @@ public sealed class SquirrelBoxMiddleware
         ArgumentNullException.ThrowIfNull(inbox);
         ArgumentNullException.ThrowIfNull(policyResolver);
 
-        if (!_options.ShouldHandleRequest(httpContext) ||
-            !_options.ProtectedMethods.Contains(httpContext.Request.Method))
+        if (!_options.ShouldHandleRequest(httpContext))
         {
             await _next(httpContext);
-            return;
-        }
-
-        SquirrelBoxHttpInbox.EnsureIdentityHeadersOnStarting(httpContext, inbox, _options);
-
-        var key = SquirrelBoxHttpInbox.ResolveRequestHeader(httpContext, _options.RequestHeaderNames);
-        var deferToPayloadFilter = SquirrelBoxHttpInbox.HasPayloadMetadata(httpContext);
-        InboxOpenResult openResult = null;
-
-        if (!deferToPayloadFilter && !string.IsNullOrWhiteSpace(key.Value))
-        {
-            openResult = await inbox.OpenOrContinueAsync(
-                SquirrelBoxHttpInbox.CreateOpenRequest(httpContext, _options),
-                httpContext.RequestAborted);
-
-            var decision = policyResolver.Resolve(openResult);
-            if (decision.Action is not InboxPolicyAction.Continue)
-            {
-                if (decision.Action is InboxPolicyAction.Replay &&
-                    await SquirrelBoxHttpInbox.TryReplayDecisionAsync(httpContext, _options, decision))
-                {
-                    return;
-                }
-
-                await SquirrelBoxHttpInbox.WriteRejectedDecisionAsync(httpContext, decision);
-                return;
-            }
-        }
-        else if (!_options.AllowApplicationComputedKeys)
-        {
-            httpContext.Response.StatusCode = StatusCodes.Status428PreconditionRequired;
             return;
         }
 
@@ -88,7 +56,7 @@ public sealed class SquirrelBoxMiddleware
 
             await _next(httpContext);
 
-            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult) is { } context &&
+            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult: null) is { } context &&
                 context.Entry.ExecutionMode == InboxExecutionMode.Inline)
             {
                 await inbox.CompleteCurrentAsync(
@@ -98,7 +66,7 @@ public sealed class SquirrelBoxMiddleware
         }
         catch (Exception exception)
         {
-            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult) is not null)
+            if (SquirrelBoxHttpInbox.ResolveCompletableContext(httpContext, inbox, openResult: null) is not null)
                 await inbox.FailCurrentAsync(exception, httpContext.RequestAborted);
 
             throw;

@@ -14,6 +14,31 @@ namespace SquirrelBox.AspNetCore.Tests;
 public sealed class SquirrelBoxMiddlewareE2ETests
 {
     [Fact]
+    public async Task Middleware_does_not_open_inbox_for_unmarked_endpoint_even_when_header_exists()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        using var first = new HttpRequestMessage(HttpMethod.Post, "/unmarked-orders");
+        first.Headers.Add("Idempotency-Key", "unmarked-key");
+        first.Content = JsonContent.Create(new OrderRequest("order-1"));
+        var firstResponse = await client.SendAsync(first);
+
+        using var second = new HttpRequestMessage(HttpMethod.Post, "/unmarked-orders");
+        second.Headers.Add("Idempotency-Key", "unmarked-key");
+        second.Content = JsonContent.Create(new OrderRequest("order-1"));
+        var secondResponse = await client.SendAsync(second);
+
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, secondResponse.StatusCode);
+        Assert.NotEqual(
+            await firstResponse.Content.ReadAsStringAsync(),
+            await secondResponse.Content.ReadAsStringAsync());
+        Assert.False(firstResponse.Headers.Contains("Idempotency-Key"));
+        Assert.False(secondResponse.Headers.Contains("Idempotency-Key"));
+    }
+
+    [Fact]
     public async Task Middleware_replays_completed_response_for_duplicate_explicit_header()
     {
         using var server = CreateServer();
@@ -94,6 +119,7 @@ public sealed class SquirrelBoxMiddlewareE2ETests
 
     private static TestServer CreateServer()
     {
+        var unmarkedExecutions = 0;
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
             {
@@ -107,6 +133,15 @@ public sealed class SquirrelBoxMiddlewareE2ETests
                 app.UseSquirrelBox();
                 app.UseEndpoints(endpoints =>
                 {
+                    endpoints.MapPost("/unmarked-orders", async context =>
+                    {
+                        var request = await context.Request.ReadFromJsonAsync<OrderRequest>();
+                        var execution = Interlocked.Increment(ref unmarkedExecutions);
+                        context.Response.StatusCode = StatusCodes.Status201Created;
+                        context.Response.ContentType = "application/json";
+                        await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = request.Id, execution }));
+                    });
+
                     endpoints.MapPost("/orders", async context =>
                     {
                         var request = await context.Request.ReadFromJsonAsync<OrderRequest>();

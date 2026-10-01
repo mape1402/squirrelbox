@@ -81,6 +81,21 @@ public sealed class InboxOpenRequest
     public InboxExecutionMode? ExecutionMode { get; init; }
 
     /// <summary>
+    /// Gets the named idempotency policy selected by the entrypoint.
+    /// </summary>
+    public string PolicyName { get; init; }
+
+    /// <summary>
+    /// Gets an optional entry lifetime override selected by the entrypoint.
+    /// </summary>
+    public TimeSpan? EntryLifetime { get; init; }
+
+    /// <summary>
+    /// Gets an optional completed duplicate lock override selected by the entrypoint.
+    /// </summary>
+    public InboxCompletedLockMode CompletedLock { get; init; } = InboxCompletedLockMode.Default;
+
+    /// <summary>
     /// Gets an optional expiration timestamp.
     /// </summary>
     public DateTimeOffset? ExpiresOnUtc { get; init; }
@@ -103,7 +118,10 @@ public sealed class InboxOpenRequest
         bool ownsCompletion = true,
         bool? allowPayloadHashAsIdempotencyKey = null,
         InboxExecutionMode? executionMode = null,
-        DateTimeOffset? expiresOnUtc = null)
+        DateTimeOffset? expiresOnUtc = null,
+        string policyName = null,
+        TimeSpan? entryLifetime = null,
+        InboxCompletedLockMode completedLock = InboxCompletedLockMode.Default)
         => new()
         {
             Source = source,
@@ -116,6 +134,9 @@ public sealed class InboxOpenRequest
             OwnsCompletion = ownsCompletion,
             AllowPayloadHashAsIdempotencyKey = allowPayloadHashAsIdempotencyKey,
             ExecutionMode = executionMode,
-            ExpiresOnUtc = expiresOnUtc
+            ExpiresOnUtc = expiresOnUtc,
+            PolicyName = policyName,
+            EntryLifetime = entryLifetime,
+            CompletedLock = completedLock
         };
 }

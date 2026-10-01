@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="2.4.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="2.4.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="2.4.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="2.4.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="2.4.0" />
+<PackageReference Include="SquirrelBox" Version="3.1.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="3.1.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.1.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.1.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="3.1.0" />
 ```
 
 ## Getting Started
@@ -51,6 +51,10 @@ services
         options.DefaultEntryLifetime = TimeSpan.FromHours(24);
         options.AllowPayloadHashAsIdempotencyKey = true;
         options.ScanAssemblyContaining<OrdersFingerprintProfile>();
+        options.AddInboxPolicy("payments", policy =>
+        {
+            policy.CompletedLock = InboxCompletedLockMode.Forever;
+        });
     })
     .UseEntityFramework<AppDbContext>();
 
@@ -121,6 +125,10 @@ catch (Exception ex)
 ```
 
 Entries use ULID ids and move through `Started`, `Completed`, `Failed`, and `Expired`.
+By default, idempotency is a time window. `DefaultEntryLifetime` is 24 hours unless you
+override it. Expired entries and failed entries can be opened again, so a failed request
+does not poison the same payload forever. Completed entries only block forever when the
+entrypoint explicitly selects `InboxCompletedLockMode.Forever`.
 
 ### Identity Metadata
 
@@ -287,7 +295,10 @@ services.AddSquirrelBoxAspNetCore(options =>
 app.UseSquirrelBox();
 ```
 
-If a request has an idempotency header, middleware reserves the inbox entry before the endpoint runs. If the request does not have a header, your endpoint can open SquirrelBox after model binding so the computed key is based on the DTO instead of raw body bytes.
+`UseSquirrelBox()` is not a global idempotency switch. A request is protected only when the
+endpoint explicitly opens SquirrelBox, for example with `[SquirrelBoxPayload]`,
+`.WithSquirrelBoxPayload()`, or `HttpContext.OpenSquirrelBoxAsync(...)`. Sending an
+`Idempotency-Key` header to an unmarked endpoint does not activate inbox protection.
 
 HTTP responses include the effective idempotency key, correlation id, attempt id, and trace id.
 When the request uses a configured alternate header such as `X-Idempotency-Key` or
@@ -312,7 +323,17 @@ public async Task<ActionResult> Create(CreateOrderRequest request, CancellationT
 ```
 
 The attribute is method-only and reads the `request` action argument by default. Use
-`[SquirrelBoxPayload("payload")]` when the DTO parameter has a different name.
+`[SquirrelBoxPayload("payload")]` when the DTO parameter has a different name. The same
+attribute can select a named policy, entrypoint TTL, or completed-lock behavior:
+
+```csharp
+[HttpPost("payments")]
+[SquirrelBoxPayload(TtlSeconds = 86_400, CompletedLock = InboxCompletedLockMode.Forever)]
+public async Task<ActionResult> CreatePayment(CreatePaymentRequest request)
+{
+    // ...
+}
+```
 
 For Minimal APIs, attach the endpoint filter:
 
@@ -331,6 +352,23 @@ app.MapPost("/orders/computed-key", async (
         : Results.Conflict(result.Decision);
 })
 .WithSquirrelBoxPayload();
+```
+
+Minimal APIs can configure the same policy data inline:
+
+```csharp
+app.MapPost("/orders/window", HandleOrder)
+   .WithSquirrelBoxPayload(options =>
+   {
+       options.EntryLifetime = TimeSpan.FromMinutes(30);
+   });
+
+app.MapPost("/payments", HandlePayment)
+   .WithSquirrelBoxPayload(options =>
+   {
+       options.PolicyName = "payments";
+       options.CompletedLock = InboxCompletedLockMode.Forever;
+   });
 ```
 
 Payload-aware endpoints let `UseSquirrelBox()` defer the open step until after model binding.
@@ -387,7 +425,36 @@ services.AddSquirrelBoxDashboard(options =>
 
 ## Messaging
 
-Use `SquirrelBox.Messaging` when building a transport adapter or orchestration layer:
+Use `SquirrelBox.Messaging` when building a transport adapter or orchestration layer. Messaging
+inbox is explicit: define policy profiles for the topics, versions, subscriptions, or operations
+that should be protected.
+
+```csharp
+services.AddSquirrelBoxMessaging(options =>
+{
+    options.ScanAssemblyContaining<OrdersMessageInboxProfile>();
+});
+```
+
+```csharp
+public sealed class OrdersMessageInboxProfile : InboxMessagePolicyProfile
+{
+    public override void Configure(InboxMessagePolicyProfileBuilder builder)
+    {
+        builder
+            .ForTopic("orders")
+            .Version("1.0.0")
+            .Subscription("billing")
+            .WithEntryLifetime(TimeSpan.FromHours(12));
+
+        builder
+            .ForTopic("payments")
+            .WithCompletedLock(InboxCompletedLockMode.Forever);
+    }
+}
+```
+
+Then open from the adapter or orchestration layer:
 
 ```csharp
 var result = await messages.OpenAsync(new InboxMessageContext
@@ -401,6 +468,12 @@ var result = await messages.OpenAsync(new InboxMessageContext
     Payload = payload,
     Metadata = metadata
 });
+
+if (!result.Enabled)
+{
+    await consumer.Handle(payload, cancellationToken);
+    return;
+}
 
 if (result.ShouldExecute)
 {
@@ -443,6 +516,11 @@ Pigeon.
 `SquirrelBox.Messaging.Pigeon` targets Pigeon 4.0.0 and integrates with consume and publish interceptors.
 
 ```csharp
+services.AddSquirrelBoxMessaging(options =>
+{
+    options.ScanAssemblyContaining<OrdersMessageInboxProfile>();
+});
+
 services.AddSquirrelBoxPigeon(options =>
 {
     options.Transport = "pigeon";
@@ -456,7 +534,7 @@ services.AddSquirrelBoxPigeon(options =>
 
 Consume:
 
-- Decision interceptor opens the inbox before the consumer handler.
+- Decision interceptor opens the inbox before the consumer handler only when a messaging inbox profile matches the topic/version/subscription/operation.
 - Execution interceptor completes or fails the inbox after the handler.
 - Deferred replay uses `IPigeonConsumerInvoker`.
 
@@ -497,6 +575,15 @@ curl -i -X POST http://127.0.0.1:5188/orders/inline \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: inline-key-1" \
   -d "{\"customerId\":\"cust-1\",\"externalOrderId\":\"inline-1\",\"amount\":42.5}"
+
+curl -i -X POST http://127.0.0.1:5188/orders/no-inbox \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ignored-by-unmarked-endpoint" \
+  -d "{\"customerId\":\"cust-1\",\"externalOrderId\":\"direct-1\",\"amount\":10.0}"
+
+curl -i -X POST http://127.0.0.1:5188/orders/window \
+  -H "Content-Type: application/json" \
+  -d "{\"customerId\":\"cust-2\",\"externalOrderId\":\"window-1\",\"amount\":25.0}"
 
 curl -i -X POST http://127.0.0.1:5188/orders/deferred \
   -H "Content-Type: application/json" \

@@ -15,6 +15,82 @@ namespace SquirrelBox.AspNetCore.Tests;
 public sealed class SquirrelBoxPayloadFilterE2ETests
 {
     [Fact]
+    public async Task Minimal_api_filter_reopens_completed_entry_after_configured_window()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        using var server = CreateServer(clock);
+        using var client = server.CreateClient();
+        var request = new PayloadOrderRequest("window-order");
+
+        var first = await client.PostAsJsonAsync("/minimal-window-orders", request);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var afterWindow = await client.PostAsJsonAsync("/minimal-window-orders", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, afterWindow.StatusCode);
+        Assert.NotEqual(
+            await first.Content.ReadAsStringAsync(),
+            await afterWindow.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Minimal_api_filter_keeps_completed_entry_locked_forever_when_configured()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        using var server = CreateServer(clock);
+        using var client = server.CreateClient();
+        var request = new PayloadOrderRequest("forever-order");
+
+        var first = await client.PostAsJsonAsync("/minimal-forever-orders", request);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var duplicate = await client.PostAsJsonAsync("/minimal-forever-orders", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, duplicate.StatusCode);
+        Assert.Equal(
+            await first.Content.ReadAsStringAsync(),
+            await duplicate.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Mvc_attribute_reopens_completed_entry_after_configured_window()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        using var server = CreateServer(clock);
+        using var client = server.CreateClient();
+        var request = new PayloadOrderRequest("mvc-window-order");
+
+        var first = await client.PostAsJsonAsync("/payload-orders/window", request);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var afterWindow = await client.PostAsJsonAsync("/payload-orders/window", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, afterWindow.StatusCode);
+        Assert.NotEqual(
+            await first.Content.ReadAsStringAsync(),
+            await afterWindow.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Mvc_attribute_keeps_completed_entry_locked_forever_when_configured()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        using var server = CreateServer(clock);
+        using var client = server.CreateClient();
+        var request = new PayloadOrderRequest("mvc-forever-order");
+
+        var first = await client.PostAsJsonAsync("/payload-orders/forever", request);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var duplicate = await client.PostAsJsonAsync("/payload-orders/forever", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, duplicate.StatusCode);
+        Assert.Equal(
+            await first.Content.ReadAsStringAsync(),
+            await duplicate.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Mvc_attribute_opens_from_bound_payload_when_key_header_is_missing()
     {
         using var server = CreateServer();
@@ -161,12 +237,18 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
         Assert.Equal("minimal-same-key", conflict.Headers.GetValues("Idempotency-Key").Single());
     }
 
-    private static TestServer CreateServer()
+    private static TestServer CreateServer(TimeProvider timeProvider = null)
     {
+        var windowExecutions = 0;
+        var foreverExecutions = 0;
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
             {
+                if (timeProvider is not null)
+                    services.AddSingleton(timeProvider);
+
                 services.AddRouting();
+                services.AddSingleton<PayloadExecutionCounter>();
                 services
                     .AddControllers()
                     .AddApplicationPart(typeof(PayloadOrdersController).Assembly);
@@ -198,6 +280,32 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                                 IdempotencyKey = identityAccessor.Current?.Operation.IdempotencyKey.Value
                             }))
                         .WithSquirrelBoxPayload();
+
+                    endpoints
+                        .MapPost("/minimal-window-orders", (PayloadOrderRequest request) =>
+                            Results.Created(
+                                $"/minimal-window-orders/{request.Id}",
+                                new
+                                {
+                                    request.Id,
+                                    Execution = Interlocked.Increment(ref windowExecutions)
+                                }))
+                        .WithSquirrelBoxPayload(options => options.EntryLifetime = TimeSpan.FromSeconds(5));
+
+                    endpoints
+                        .MapPost("/minimal-forever-orders", (PayloadOrderRequest request) =>
+                            Results.Created(
+                                $"/minimal-forever-orders/{request.Id}",
+                                new
+                                {
+                                    request.Id,
+                                    Execution = Interlocked.Increment(ref foreverExecutions)
+                                }))
+                        .WithSquirrelBoxPayload(options =>
+                        {
+                            options.EntryLifetime = TimeSpan.FromSeconds(5);
+                            options.CompletedLock = InboxCompletedLockMode.Forever;
+                        });
                 });
             });
 
@@ -207,7 +315,21 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
     private static void AssertOpenState(string body, InboxOpenState expected)
     {
         using var document = JsonDocument.Parse(body);
-        Assert.Equal((int)expected, document.RootElement.GetProperty("State").GetInt32());
+        Assert.Equal(expected.ToString(), document.RootElement.GetProperty("State").GetString());
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow;
+
+        public ManualTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan value) => _utcNow = _utcNow.Add(value);
     }
 }
 
@@ -220,6 +342,13 @@ public sealed record PayloadOrderRequest(string Id);
 [Route("payload-orders")]
 public sealed class PayloadOrdersController : ControllerBase
 {
+    private readonly PayloadExecutionCounter _counter;
+
+    public PayloadOrdersController(PayloadExecutionCounter counter)
+    {
+        _counter = counter;
+    }
+
     [HttpPost]
     [SquirrelBoxPayload]
     public IActionResult Create(PayloadOrderRequest request)
@@ -235,4 +364,36 @@ public sealed class PayloadOrdersController : ControllerBase
         Response.Headers.ETag = $"\"mvc-custom-{payload.Id}\"";
         return Created($"/payload-orders/{payload.Id}", new { payload.Id });
     }
+
+    [HttpPost("window")]
+    [SquirrelBoxPayload(TtlSeconds = 5)]
+    public IActionResult Window(PayloadOrderRequest request)
+        => Created(
+            $"/payload-orders/{request.Id}",
+            new
+            {
+                request.Id,
+                Execution = _counter.NextWindow()
+            });
+
+    [HttpPost("forever")]
+    [SquirrelBoxPayload(TtlSeconds = 5, CompletedLock = InboxCompletedLockMode.Forever)]
+    public IActionResult Forever(PayloadOrderRequest request)
+        => Created(
+            $"/payload-orders/{request.Id}",
+            new
+            {
+                request.Id,
+                Execution = _counter.NextForever()
+            });
+}
+
+public sealed class PayloadExecutionCounter
+{
+    private int _window;
+    private int _forever;
+
+    public int NextWindow() => Interlocked.Increment(ref _window);
+
+    public int NextForever() => Interlocked.Increment(ref _forever);
 }

@@ -125,6 +125,38 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.Contains(attempts, attempt => attempt.AttemptId == duplicate.EffectiveAttemptId);
     }
 
+    [Fact]
+    public async Task SqlServer_store_reopens_expired_entry_without_unique_key_blocking_retry()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString, clock);
+        await EnsureDatabaseAsync(provider);
+        var request = InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-window",
+            new TestPayload("order-window"),
+            entryLifetime: TimeSpan.FromMinutes(5));
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var inbox = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            await inbox.OpenOrContinueAsync(request);
+            await inbox.CompleteCurrentAsync();
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        using var secondScope = provider.CreateScope();
+        var reopened = await secondScope.ServiceProvider
+            .GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(request);
+
+        Assert.Equal(InboxOpenState.Opened, reopened.State);
+        Assert.Equal(InboxStatus.Started, reopened.Entry.Status);
+        Assert.True(reopened.Accepted);
+    }
+
     private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
         ServiceProvider provider,
         Action execute,
@@ -165,9 +197,12 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         return await task;
     }
 
-    private static ServiceProvider CreateProvider(string connectionString)
+    private static ServiceProvider CreateProvider(string connectionString, TimeProvider timeProvider = null)
     {
         var services = new ServiceCollection();
+        if (timeProvider is not null)
+            services.AddSingleton(timeProvider);
+
         services.AddDbContext<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
         services
             .AddSquirrelBox()
@@ -197,6 +232,20 @@ public sealed class EntityFrameworkInboxStoreE2ETests
     }
 
     private sealed record TestPayload(string Id);
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow;
+
+        public ManualTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan value) => _utcNow = _utcNow.Add(value);
+    }
 
     private sealed class TestInboxDbContext : DbContext
     {

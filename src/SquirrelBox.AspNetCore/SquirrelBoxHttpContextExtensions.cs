@@ -19,6 +19,7 @@ public static class SquirrelBoxHttpContextExtensions
     /// <param name="operation">Optional operation override.</param>
     /// <param name="source">Optional source override.</param>
     /// <param name="executionMode">Optional execution mode override.</param>
+    /// <param name="configure">Optional entrypoint inbox policy configuration.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The open result.</returns>
     public static ValueTask<InboxOpenResult> OpenSquirrelBoxAsync<TPayload>(
@@ -28,6 +29,7 @@ public static class SquirrelBoxHttpContextExtensions
         string operation = null,
         string source = null,
         InboxExecutionMode? executionMode = null,
+        Action<SquirrelBoxPayloadOptions> configure = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(httpContext);
@@ -36,6 +38,10 @@ public static class SquirrelBoxHttpContextExtensions
         var options = httpContext.RequestServices
             .GetService<IOptions<SquirrelBoxAspNetCoreOptions>>()?.Value
             ?? new SquirrelBoxAspNetCoreOptions();
+        var payloadOptions = new SquirrelBoxPayloadOptions();
+        configure?.Invoke(payloadOptions);
+
+        SquirrelBoxHttpInbox.EnsureIdentityHeadersOnStarting(httpContext, inbox, options);
 
         return inbox.OpenOrContinueAsync(
             SquirrelBoxHttpInbox.CreateOpenRequest(
@@ -44,7 +50,8 @@ public static class SquirrelBoxHttpContextExtensions
                 payload,
                 operation,
                 source,
-                executionMode: executionMode),
+                executionMode: executionMode,
+                payloadMetadata: new SquirrelBoxPayloadEndpointMetadata(payloadOptions)),
             cancellationToken);
     }
 }

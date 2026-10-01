@@ -9,6 +9,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
 {
     private readonly IInboxService _inbox;
     private readonly IInboxPolicyResolver _policyResolver;
+    private readonly IInboxMessagePolicyRegistry _policyRegistry;
     private readonly ISquirrelBoxMessageMetadataEnricher _metadataEnricher;
     private readonly SquirrelBoxMessagingOptions _options;
 
@@ -17,16 +18,19 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
     /// </summary>
     /// <param name="inbox">The core inbox service.</param>
     /// <param name="policyResolver">The core policy resolver.</param>
+    /// <param name="policyRegistry">The messaging inbox policy registry.</param>
     /// <param name="metadataEnricher">The SquirrelBox message metadata enricher.</param>
     /// <param name="options">The messaging options.</param>
     public DefaultInboxMessageService(
         IInboxService inbox,
         IInboxPolicyResolver policyResolver,
+        IInboxMessagePolicyRegistry policyRegistry,
         ISquirrelBoxMessageMetadataEnricher metadataEnricher,
         IOptions<SquirrelBoxMessagingOptions> options)
     {
         _inbox = inbox ?? throw new ArgumentNullException(nameof(inbox));
         _policyResolver = policyResolver ?? throw new ArgumentNullException(nameof(policyResolver));
+        _policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
         _metadataEnricher = metadataEnricher ?? throw new ArgumentNullException(nameof(metadataEnricher));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
@@ -38,6 +42,9 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(context.Transport);
+
+        if (!_policyRegistry.TryResolve(context, out var policy))
+            return InboxMessageOpenResult.Disabled;
 
         var metadata = context.Metadata is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -61,8 +68,11 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             TraceIdName = traceId.Name,
             AttemptIdName = SquirrelBoxMetadataNames.MetadataSection,
             Owner = "messaging",
-            ExecutionMode = context.ExecutionMode ?? _options.ExecutionModeResolver?.Invoke(context),
-            AllowPayloadHashAsIdempotencyKey = _options.AllowPayloadHashAsIdempotencyKey,
+            ExecutionMode = context.ExecutionMode ?? policy.ExecutionMode ?? _options.ExecutionModeResolver?.Invoke(context),
+            PolicyName = policy.CorePolicyName,
+            EntryLifetime = policy.EntryLifetime,
+            CompletedLock = policy.CompletedLock,
+            AllowPayloadHashAsIdempotencyKey = policy.AllowPayloadHashAsIdempotencyKey ?? _options.AllowPayloadHashAsIdempotencyKey,
             Metadata = metadata
         };
 

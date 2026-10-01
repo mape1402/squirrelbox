@@ -27,20 +27,23 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
         if (ReferenceEquals(stored, entry))
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Opened, entry: stored));
 
-        if (stored.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= entry.CreatedOnUtc)
-        {
-            stored.Status = InboxStatus.Expired;
-            stored.UpdatedOnUtc = entry.CreatedOnUtc;
-            RecordAttempt(stored, InboxOpenState.Expired, entry);
-            return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Expired, entry: stored));
-        }
+        var isExpired = IsExpired(stored, entry.CreatedOnUtc);
+        var completedForever = IsCompletedForever(stored);
 
-        if (!string.IsNullOrWhiteSpace(stored.PayloadHash) &&
+        if ((!isExpired || completedForever) &&
+            !string.IsNullOrWhiteSpace(stored.PayloadHash) &&
             !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
             !string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
         {
             RecordAttempt(stored, InboxOpenState.PayloadConflict, entry);
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.PayloadConflict, entry: stored));
+        }
+
+        if (ShouldReopen(stored, isExpired))
+        {
+            Reopen(stored, entry, preserveCorrelation: stored.Status is InboxStatus.Failed && !isExpired);
+            RecordAttempt(stored, InboxOpenState.Opened, entry);
+            return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Opened, entry: stored));
         }
 
         if (string.IsNullOrWhiteSpace(stored.PayloadHash) && !string.IsNullOrWhiteSpace(entry.PayloadHash))
@@ -146,6 +149,51 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
             InboxStatus.Expired => InboxOpenState.Expired,
             _ => InboxOpenState.DuplicateInProgress
         };
+
+    private static bool IsExpired(InboxEntry entry, DateTimeOffset now)
+        => entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= now;
+
+    private static bool IsCompletedForever(InboxEntry entry)
+        => entry.Status is InboxStatus.Completed &&
+           entry.CompletedLock is InboxCompletedLockMode.Forever;
+
+    private static bool ShouldReopen(InboxEntry entry, bool isExpired)
+        => entry.Status is InboxStatus.Failed ||
+           (isExpired && !IsCompletedForever(entry));
+
+    private static void Reopen(
+        InboxEntry stored,
+        InboxEntry incoming,
+        bool preserveCorrelation)
+    {
+        var correlationId = preserveCorrelation ? stored.CorrelationId : incoming.CorrelationId;
+        var correlationIdName = preserveCorrelation ? stored.CorrelationIdName : incoming.CorrelationIdName;
+        var correlationIdSource = preserveCorrelation ? stored.CorrelationIdSource : incoming.CorrelationIdSource;
+
+        stored.IdempotencyKeyName = incoming.IdempotencyKeyName;
+        stored.IdempotencyKeySource = incoming.IdempotencyKeySource;
+        stored.PayloadHash = incoming.PayloadHash;
+        stored.PayloadType = incoming.PayloadType;
+        stored.CorrelationId = correlationId;
+        stored.CorrelationIdName = correlationIdName;
+        stored.CorrelationIdSource = correlationIdSource;
+        stored.OriginalAttemptId = incoming.CurrentAttempt?.AttemptId;
+        stored.OriginalTraceId = incoming.CurrentAttempt?.TraceId;
+        stored.ExecutionMode = incoming.ExecutionMode;
+        stored.PolicyName = incoming.PolicyName;
+        stored.CompletedLock = incoming.CompletedLock is InboxCompletedLockMode.Default
+            ? InboxCompletedLockMode.UntilExpiration
+            : incoming.CompletedLock;
+        stored.Status = InboxStatus.Started;
+        stored.CreatedOnUtc = incoming.CreatedOnUtc;
+        stored.UpdatedOnUtc = incoming.UpdatedOnUtc;
+        stored.CompletedOnUtc = null;
+        stored.ExpiresOnUtc = incoming.ExpiresOnUtc;
+        stored.Failure = null;
+        stored.FailureDetails = null;
+        stored.Completion = null;
+        stored.Metadata = new Dictionary<string, string>(incoming.Metadata, StringComparer.OrdinalIgnoreCase);
+    }
 
     private void RecordAttempt(InboxEntry stored, InboxOpenState state, InboxEntry incoming)
     {
