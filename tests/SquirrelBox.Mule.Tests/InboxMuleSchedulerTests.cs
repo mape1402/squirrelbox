@@ -13,6 +13,7 @@ public sealed class InboxMuleSchedulerTests
 {
     private static readonly ActionKey Key = ActionKey.From("tests.squirrelbox.deferred.v1");
     private static readonly ActionKey FailOnceKey = ActionKey.From("tests.squirrelbox.fail-once.v1");
+    private static readonly ActionKey FailAlwaysKey = ActionKey.From("tests.squirrelbox.fail-always.v1");
 
     [Fact]
     public async Task EnqueueCurrentAsync_attaches_inbox_metadata_to_mule_action()
@@ -199,6 +200,38 @@ public sealed class InboxMuleSchedulerTests
     }
 
     [Fact]
+    public async Task SquirrelBoxMuleAction_fails_inbox_entry_when_attempt_reaches_max_attempts()
+    {
+        using var provider = CreateServiceProvider();
+        var entryId = await OpenDeferredEntryAsync(provider, "order-terminal-retry");
+
+        await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var workerScope = provider.CreateScope();
+            var action = new CaptureDeferredPayloadAction(
+                workerScope.ServiceProvider.GetRequiredService<IInboxService>(),
+                workerScope.ServiceProvider.GetRequiredService<DeferredProbe>(),
+                fail: true);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                action.ExecuteAsync(
+                    CreateMuleContext(
+                        workerScope.ServiceProvider,
+                        entryId,
+                        new DeferredPayload("order-terminal-retry"),
+                        attempts: 1,
+                        maxAttempts: 2),
+                    CancellationToken.None).AsTask());
+        });
+
+        using var verifyScope = provider.CreateScope();
+        var entry = await verifyScope.ServiceProvider.GetRequiredService<IInboxService>().GetAsync(entryId);
+
+        Assert.Equal(InboxStatus.Failed, entry.Status);
+        Assert.Equal("planned failure", entry.FailureDetails.ErrorMessage);
+    }
+
+    [Fact]
     public async Task Hosted_mule_worker_executes_deferred_inbox_entry_end_to_end()
     {
         using var host = CreateHost();
@@ -267,6 +300,25 @@ public sealed class InboxMuleSchedulerTests
 
         Assert.True(probe.AttemptCount("order-retry-hosted") >= 2);
         Assert.Equal("order-retry-hosted", probe.Values.Single());
+    }
+
+    [Fact]
+    public async Task Hosted_mule_worker_fails_deferred_inbox_entry_after_terminal_retry()
+    {
+        using var host = CreateRetryHost();
+        await host.StartAsync();
+
+        var entryId = await OpenAndScheduleDeferredEntryAsync(
+            host.Services,
+            "order-terminal-hosted",
+            FailAlwaysKey,
+            policyName: "retry-policy");
+
+        await WaitForInboxStatusAsync(host.Services, entryId, InboxStatus.Failed);
+        await host.StopAsync();
+
+        var probe = host.Services.GetRequiredService<DeferredProbe>();
+        Assert.True(probe.AttemptCount("order-terminal-hosted") >= 2);
     }
 
     private static ServiceProvider CreateServiceProvider()
@@ -507,6 +559,26 @@ public sealed class InboxMuleSchedulerTests
 
             _probe.Record(context.Payload.Id, context.Inbox.Entry.Id, context.Inbox.Owner);
             return ValueTask.CompletedTask;
+        }
+    }
+
+    [MuleAction("tests.squirrelbox.fail-always.v1")]
+    private sealed class FailAlwaysDeferredPayloadAction : SquirrelBoxMuleAction<DeferredPayload>
+    {
+        private readonly DeferredProbe _probe;
+
+        public FailAlwaysDeferredPayloadAction(IInboxService inbox, DeferredProbe probe)
+            : base(inbox)
+        {
+            _probe = probe;
+        }
+
+        protected override ValueTask ExecuteInboxAsync(
+            SquirrelBoxMuleActionContext<DeferredPayload> context,
+            CancellationToken cancellationToken)
+        {
+            _probe.IncrementAttempt(context.Payload.Id);
+            throw new InvalidOperationException("planned terminal failure");
         }
     }
 
