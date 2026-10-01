@@ -110,6 +110,18 @@ public sealed class SquirrelBoxInboxEntryRecord
     public string ExecutionMode { get; set; }
 
     /// <summary>
+    /// Gets or sets the idempotency policy name resolved for this entry.
+    /// </summary>
+    [MaxLength(128)]
+    public string PolicyName { get; set; }
+
+    /// <summary>
+    /// Gets or sets how completed duplicates are blocked.
+    /// </summary>
+    [MaxLength(64)]
+    public string CompletedLock { get; set; }
+
+    /// <summary>
     /// Gets or sets the UTC creation timestamp.
     /// </summary>
     public DateTimeOffset CreatedOnUtc { get; set; }

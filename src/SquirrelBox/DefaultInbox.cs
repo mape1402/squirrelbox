@@ -70,6 +70,10 @@ public sealed class DefaultInbox : IInboxService
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Source);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Operation);
 
+        var requestMetadata = request.Metadata is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase);
+        var policy = ResolvePolicy(request.PolicyName);
         var payloadHash = request.Payload is null ? null : _payloadHasher.ComputeHash(request.Payload);
         var idempotencyKey = request.IdempotencyKey;
         var idempotencyKeyName = ResolveName(request.IdempotencyKeyName, SquirrelBoxMetadataNames.IdempotencyKey);
@@ -77,7 +81,9 @@ public sealed class DefaultInbox : IInboxService
 
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            var allowPayloadFallback = request.AllowPayloadHashAsIdempotencyKey ?? _options.AllowPayloadHashAsIdempotencyKey;
+            var allowPayloadFallback = request.AllowPayloadHashAsIdempotencyKey ??
+                                       policy.AllowPayloadHashAsIdempotencyKey ??
+                                       _options.AllowPayloadHashAsIdempotencyKey;
             if (!allowPayloadFallback || string.IsNullOrWhiteSpace(payloadHash))
                 return new InboxOpenResult(InboxOpenState.MissingIdempotencyKey);
 
@@ -95,7 +101,7 @@ public sealed class DefaultInbox : IInboxService
             IncomingCorrelationId = request.CorrelationId,
             IncomingTraceId = request.TraceId,
             Payload = request.Payload,
-            Metadata = request.Metadata
+            Metadata = requestMetadata
         };
         var correlationId = _correlationIdFactory.Create(identityFactoryContext);
         var traceId = _traceIdFactory.Create(identityFactoryContext);
@@ -109,8 +115,9 @@ public sealed class DefaultInbox : IInboxService
             TraceIdName = ResolveName(request.TraceIdName, SquirrelBoxMetadataNames.TraceId),
             TraceIdSource = ResolveTraceSource(request),
             CreatedOnUtc = now,
-            Metadata = new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase)
+            Metadata = new Dictionary<string, string>(requestMetadata, StringComparer.OrdinalIgnoreCase)
         };
+        var completedLock = ResolveCompletedLock(request, policy);
         var entry = new InboxEntry
         {
             Id = Ulid.NewUlid(),
@@ -131,12 +138,14 @@ public sealed class DefaultInbox : IInboxService
             LastAttemptId = attempt.AttemptId,
             LastTraceId = attempt.TraceId,
             CurrentAttempt = attempt,
-            ExecutionMode = request.ExecutionMode ?? _options.DefaultExecutionMode,
+            ExecutionMode = request.ExecutionMode ?? policy.ExecutionMode ?? _options.DefaultExecutionMode,
+            PolicyName = policy.Name,
+            CompletedLock = completedLock,
             Status = InboxStatus.Started,
             CreatedOnUtc = now,
             UpdatedOnUtc = now,
-            ExpiresOnUtc = request.ExpiresOnUtc ?? ResolveDefaultExpiration(now),
-            Metadata = new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase)
+            ExpiresOnUtc = request.ExpiresOnUtc ?? ResolveExpiration(now, request, policy),
+            Metadata = new Dictionary<string, string>(requestMetadata, StringComparer.OrdinalIgnoreCase)
         };
         attempt.InboxEntryId = entry.Id;
 
@@ -280,10 +289,42 @@ public sealed class DefaultInbox : IInboxService
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => _transactionRunner.RunAsync(token => _store.GetAsync(entryId, token), cancellationToken);
 
-    private DateTimeOffset? ResolveDefaultExpiration(DateTimeOffset now)
-        => _options.DefaultEntryLifetime is { } lifetime && lifetime > TimeSpan.Zero
-            ? now.Add(lifetime)
+    private InboxIdempotencyPolicy ResolvePolicy(string policyName)
+    {
+        if (!string.IsNullOrWhiteSpace(policyName) &&
+            _options.InboxPolicies.TryGetValue(policyName, out var namedPolicy))
+        {
+            return namedPolicy;
+        }
+
+        return _options.DefaultInboxPolicy;
+    }
+
+    private DateTimeOffset? ResolveExpiration(
+        DateTimeOffset now,
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        var lifetime = request.EntryLifetime ??
+                       policy.EntryLifetime ??
+                       _options.DefaultEntryLifetime;
+
+        return lifetime is { } value && value > TimeSpan.Zero
+            ? now.Add(value)
             : null;
+    }
+
+    private static InboxCompletedLockMode ResolveCompletedLock(
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        if (request.CompletedLock is not InboxCompletedLockMode.Default)
+            return request.CompletedLock;
+
+        return policy.CompletedLock is InboxCompletedLockMode.Default
+            ? InboxCompletedLockMode.UntilExpiration
+            : policy.CompletedLock;
+    }
 
     private InboxContext GetRequiredContext()
         => Current ?? throw new InboxContextUnavailableException();

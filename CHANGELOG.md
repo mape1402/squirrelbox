@@ -4,6 +4,23 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v3.1.0] - 2026-10-01
+
+### Added
+
+- Added entrypoint idempotency policies with configurable entry lifetime, named core policy selection, and completed-duplicate lock behavior.
+- Added inline policy configuration to method-level `[SquirrelBoxPayload]` and Minimal API `.WithSquirrelBoxPayload(...)`.
+- Added messaging inbox policy profiles discovered from configured assemblies, with topic, version, subscription, and operation matching.
+- Added sample endpoints for unmarked HTTP requests, short idempotency windows, completed-forever locking, and profile-based Pigeon inbox activation.
+
+### Changed
+
+- Changed ASP.NET Core inbox activation so `UseSquirrelBox()` no longer opens inbox entries globally or merely because an idempotency header exists; endpoints must opt in explicitly.
+- Changed expired and failed inbox entries to reopen for execution instead of blocking retries forever.
+- Changed completed entries to block only for the configured idempotency window unless the entrypoint explicitly requests `InboxCompletedLockMode.Forever`.
+- Changed `SquirrelBox.Messaging` and the Pigeon consume adapter to skip inbox opening when no messaging inbox policy profile matches.
+- Changed HTTP rejection payloads to serialize inbox state and action as names instead of numeric enum values.
+
 ## [v3.0.0] - 2026-09-29
 
 ### Added

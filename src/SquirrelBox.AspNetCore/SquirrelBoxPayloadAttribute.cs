@@ -23,6 +23,40 @@ public sealed class SquirrelBoxPayloadAttribute : Attribute, IAsyncActionFilter,
     /// <inheritdoc />
     public string ArgumentName { get; }
 
+    /// <summary>
+    /// Gets or sets the named inbox policy selected by this action.
+    /// </summary>
+    public string PolicyName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the named inbox policy selected by this action.
+    /// </summary>
+    public string Policy
+    {
+        get => PolicyName;
+        set => PolicyName = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the entry lifetime override in seconds.
+    /// </summary>
+    public int TtlSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the entry lifetime override in seconds.
+    /// </summary>
+    public int WindowSeconds
+    {
+        get => TtlSeconds;
+        set => TtlSeconds = value;
+    }
+
+    /// <inheritdoc />
+    public TimeSpan? EntryLifetime => TtlSeconds > 0 ? TimeSpan.FromSeconds(TtlSeconds) : null;
+
+    /// <inheritdoc />
+    public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
+
     /// <inheritdoc />
     public async Task OnActionExecutionAsync(
         ActionExecutingContext context,
@@ -42,6 +76,7 @@ public sealed class SquirrelBoxPayloadAttribute : Attribute, IAsyncActionFilter,
         var accepted = await SquirrelBoxPayloadFilterExecutor.TryAcceptAsync(
             context.HttpContext,
             payload,
+            this,
             services.GetRequiredService<IInboxService>(),
             services.GetRequiredService<IInboxPolicyResolver>(),
             services.GetRequiredService<IOptions<SquirrelBoxAspNetCoreOptions>>().Value);

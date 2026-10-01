@@ -96,6 +96,16 @@ public sealed class InboxEntry
     public InboxExecutionMode ExecutionMode { get; set; }
 
     /// <summary>
+    /// Gets or sets the idempotency policy name resolved for this entry.
+    /// </summary>
+    public string PolicyName { get; set; }
+
+    /// <summary>
+    /// Gets or sets how this entry blocks completed duplicates.
+    /// </summary>
+    public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.UntilExpiration;
+
+    /// <summary>
     /// Gets or sets when the entry was created in UTC.
     /// </summary>
     public DateTimeOffset CreatedOnUtc { get; set; }

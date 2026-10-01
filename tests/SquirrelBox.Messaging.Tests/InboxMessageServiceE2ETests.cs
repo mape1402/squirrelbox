@@ -6,6 +6,29 @@ namespace SquirrelBox.Messaging.Tests;
 public sealed class InboxMessageServiceE2ETests
 {
     [Fact]
+    public async Task OpenAsync_does_not_open_inbox_when_no_policy_profile_matches()
+    {
+        var provider = CreateProvider(scanProfiles: false);
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            Payload = new OrderMessage("order-disabled"),
+            Metadata = CreateSquirrelBoxMetadata("message-key")
+        });
+
+        Assert.False(opened.Enabled);
+        Assert.True(opened.ShouldExecute);
+        Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
+    }
+
+    [Fact]
     public async Task OpenAsync_uses_structured_metadata_and_attaches_section_to_reply_metadata()
     {
         var provider = CreateProvider();
@@ -158,11 +181,15 @@ public sealed class InboxMessageServiceE2ETests
         AssertNoFlatIdentityMetadata(replyMetadata);
     }
 
-    private static ServiceProvider CreateProvider()
+    private static ServiceProvider CreateProvider(bool scanProfiles = true)
     {
         var services = new ServiceCollection();
         services.AddSquirrelBox().UseInMemory();
-        services.AddSquirrelBoxMessaging();
+        services.AddSquirrelBoxMessaging(options =>
+        {
+            if (scanProfiles)
+                options.ScanAssemblyContaining<InboxMessageServiceE2ETests>();
+        });
         return services.BuildServiceProvider();
     }
 
@@ -207,4 +234,10 @@ public sealed class InboxMessageServiceE2ETests
     }
 
     private sealed record OrderMessage(string Id);
+}
+
+public sealed class InboxMessageServiceTestPolicyProfile : InboxMessagePolicyProfile
+{
+    public override void Configure(InboxMessagePolicyProfileBuilder builder)
+        => builder.ForTopic("orders");
 }

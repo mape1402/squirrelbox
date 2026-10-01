@@ -35,6 +35,8 @@ internal static class SquirrelBoxModelBuilderExtensions
             entity.Property(entry => entry.LastTraceId).HasMaxLength(256);
             entity.Property(entry => entry.Status).HasMaxLength(64).IsRequired();
             entity.Property(entry => entry.ExecutionMode).HasMaxLength(64).IsRequired();
+            entity.Property(entry => entry.PolicyName).HasMaxLength(128);
+            entity.Property(entry => entry.CompletedLock).HasMaxLength(64).IsRequired();
             entity.Property(entry => entry.MetadataJson).HasColumnType("nvarchar(max)");
             entity.Property(entry => entry.CompletionJson).HasColumnType("nvarchar(max)");
             entity.Property(entry => entry.FailureDetailsJson).HasColumnType("nvarchar(max)");

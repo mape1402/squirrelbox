@@ -10,6 +10,7 @@ using SquirrelBox;
 using SquirrelBox.AspNetCore;
 using SquirrelBox.AspNetCore.Dashboard;
 using SquirrelBox.InMemory;
+using SquirrelBox.Messaging;
 using SquirrelBox.Messaging.Pigeon;
 using SquirrelBox.Mule;
 
@@ -56,6 +57,7 @@ builder.Services.AddMule(mule => mule
     .UseInMemory()
     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>()
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
+builder.Services.AddSquirrelBoxMessaging(options => options.ScanAssemblyContaining<SamplePigeonInboxProfile>());
 
 var pigeon = builder.Services.AddPigeon(builder.Configuration, settings =>
 {
@@ -115,7 +117,10 @@ app.MapGet("/", () => Results.Ok(new
     endpoints = new[]
     {
         "POST /orders/inline executes a declared operation inline.",
+        "POST /orders/no-inbox writes directly and is not protected by HTTP inbox, even if Idempotency-Key is sent.",
         "POST /orders/computed-key opens HTTP inbox from the bound payload and returns a computed Idempotency-Key.",
+        "POST /orders/window uses a short idempotency window and accepts the same payload again after the window expires.",
+        "POST /orders/forever keeps completed duplicates locked forever for payment-style entrypoints.",
         "POST /orders/deferred schedules the declared operation through Mule.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
@@ -126,6 +131,14 @@ app.MapGet("/", () => Results.Ok(new
         "GET /squirrelbox opens the live dashboard. Login with admin / secret."
     }
 }));
+
+app.MapPost("/orders/no-inbox", (
+    CreateOrderRequest request,
+    SampleOrderStore orders) =>
+{
+    var order = orders.MarkCreated(request);
+    return Results.Created($"/orders/{order.Id}", new { order });
+});
 
 app.MapPost("/orders/inline", async (
     CreateOrderRequest request,
@@ -151,6 +164,36 @@ app.MapPost("/orders/computed-key", async (
     return ToHttpResult(result);
 })
 .WithSquirrelBoxPayload();
+
+app.MapPost("/orders/window", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxPayload(options => options.EntryLifetime = TimeSpan.FromSeconds(30));
+
+app.MapPost("/orders/forever", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxPayload(options =>
+{
+    options.EntryLifetime = TimeSpan.FromSeconds(30);
+    options.CompletedLock = InboxCompletedLockMode.Forever;
+});
 
 app.MapPost("/orders/deferred", async (
     CreateOrderRequest request,
@@ -342,6 +385,21 @@ public static class SamplePigeonRoutes
     /// Gets the deferred sample topic.
     /// </summary>
     public const string DeferredTopic = "sample.orders.deferred";
+}
+
+/// <summary>
+/// Enables SquirrelBox inbox only for the sample Pigeon topics.
+/// </summary>
+public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
+{
+    /// <inheritdoc />
+    public override void Configure(InboxMessagePolicyProfileBuilder builder)
+    {
+        builder.ForTopic(SamplePigeonRoutes.InlineTopic);
+        builder
+            .ForTopic(SamplePigeonRoutes.DeferredTopic)
+            .WithExecutionMode(InboxExecutionMode.Deferred);
+    }
 }
 
 /// <summary>

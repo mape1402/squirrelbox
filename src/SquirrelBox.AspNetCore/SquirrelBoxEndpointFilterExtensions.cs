@@ -19,14 +19,43 @@ public static class SquirrelBoxEndpointFilterExtensions
     public static RouteHandlerBuilder WithSquirrelBoxPayload(
         this RouteHandlerBuilder builder,
         string argumentName = "request")
+        => builder.WithSquirrelBoxPayload(argumentName, configure: null);
+
+    /// <summary>
+    /// Opens or continues a SquirrelBox inbox context from a bound Minimal API endpoint argument.
+    /// </summary>
+    /// <param name="builder">The route handler builder.</param>
+    /// <param name="configure">The endpoint inbox configuration callback.</param>
+    /// <returns>The same route handler builder for fluent configuration.</returns>
+    public static RouteHandlerBuilder WithSquirrelBoxPayload(
+        this RouteHandlerBuilder builder,
+        Action<SquirrelBoxPayloadOptions> configure)
+        => builder.WithSquirrelBoxPayload("request", configure);
+
+    /// <summary>
+    /// Opens or continues a SquirrelBox inbox context from a bound Minimal API endpoint argument.
+    /// </summary>
+    /// <param name="builder">The route handler builder.</param>
+    /// <param name="argumentName">The endpoint argument name that contains the payload.</param>
+    /// <param name="configure">The endpoint inbox configuration callback.</param>
+    /// <returns>The same route handler builder for fluent configuration.</returns>
+    public static RouteHandlerBuilder WithSquirrelBoxPayload(
+        this RouteHandlerBuilder builder,
+        string argumentName,
+        Action<SquirrelBoxPayloadOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var resolvedArgumentName = string.IsNullOrWhiteSpace(argumentName) ? "request" : argumentName;
+        var payloadOptions = new SquirrelBoxPayloadOptions
+        {
+            ArgumentName = string.IsNullOrWhiteSpace(argumentName) ? "request" : argumentName
+        };
+        configure?.Invoke(payloadOptions);
+        var metadata = new SquirrelBoxPayloadEndpointMetadata(payloadOptions);
 
-        builder.WithMetadata(new SquirrelBoxPayloadEndpointMetadata(resolvedArgumentName));
+        builder.WithMetadata(metadata);
         builder.AddEndpointFilterFactory((factoryContext, next) =>
         {
-            var payloadIndex = ResolvePayloadIndex(factoryContext, resolvedArgumentName);
+            var payloadIndex = ResolvePayloadIndex(factoryContext, metadata.ArgumentName);
 
             return async invocationContext =>
             {
@@ -41,6 +70,7 @@ public static class SquirrelBoxEndpointFilterExtensions
                 var accepted = await SquirrelBoxPayloadFilterExecutor.TryAcceptAsync(
                     invocationContext.HttpContext,
                     payload,
+                    metadata,
                     services.GetRequiredService<IInboxService>(),
                     services.GetRequiredService<IInboxPolicyResolver>(),
                     services.GetRequiredService<IOptions<SquirrelBoxAspNetCoreOptions>>().Value);

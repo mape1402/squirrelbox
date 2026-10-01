@@ -64,7 +64,8 @@ internal static class SquirrelBoxHttpInbox
         string operation = null,
         string source = null,
         string owner = null,
-        InboxExecutionMode? executionMode = null)
+        InboxExecutionMode? executionMode = null,
+        ISquirrelBoxPayloadMetadata payloadMetadata = null)
     {
         var idempotencyKey = ResolveRequestHeader(httpContext, options.RequestHeaderNames);
         var correlationId = ResolveRequestHeader(httpContext, options.CorrelationIdHeaderNames);
@@ -84,7 +85,10 @@ internal static class SquirrelBoxHttpInbox
             TraceIdName = traceId.Name,
             AttemptIdName = ResolveDefaultName(options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),
             Owner = owner ?? options.Owner,
-            ExecutionMode = executionMode ?? options.ExecutionModeResolver(httpContext)
+            ExecutionMode = executionMode ?? options.ExecutionModeResolver(httpContext),
+            PolicyName = payloadMetadata?.PolicyName,
+            EntryLifetime = payloadMetadata?.EntryLifetime,
+            CompletedLock = payloadMetadata?.CompletedLock ?? InboxCompletedLockMode.Default
         };
     }
 
@@ -145,8 +149,8 @@ internal static class SquirrelBoxHttpInbox
         httpContext.Response.ContentType = "application/json";
         return httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
         {
-            decision.State,
-            decision.Action,
+            State = decision.State.ToString(),
+            Action = decision.Action.ToString(),
             decision.EffectiveIdempotencyKey,
             decision.Entry?.CorrelationId,
             AttemptId = decision.Entry?.CurrentAttempt?.AttemptId ?? decision.Entry?.LastAttemptId,
@@ -164,7 +168,7 @@ internal static class SquirrelBoxHttpInbox
 
         return httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
         {
-            result.State,
+            State = result.State.ToString(),
             InboxEntryId = result.Entry?.Id.ToString(),
             IdempotencyKey = result.Entry?.IdempotencyKey,
             result.Entry?.CorrelationId,

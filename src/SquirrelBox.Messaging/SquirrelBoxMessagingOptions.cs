@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace SquirrelBox.Messaging;
 
 /// <summary>
@@ -5,6 +7,11 @@ namespace SquirrelBox.Messaging;
 /// </summary>
 public sealed class SquirrelBoxMessagingOptions
 {
+    /// <summary>
+    /// Gets the assemblies scanned for <see cref="InboxMessagePolicyProfile"/> implementations.
+    /// </summary>
+    public IList<Assembly> ProfileAssemblies { get; } = [];
+
     /// <summary>
     /// Gets or sets the metadata name used when the broker message id becomes the idempotency key.
     /// </summary>
@@ -41,4 +48,27 @@ public sealed class SquirrelBoxMessagingOptions
     /// Gets or sets an optional execution mode resolver for incoming messages.
     /// </summary>
     public Func<InboxMessageContext, InboxExecutionMode?> ExecutionModeResolver { get; set; }
+
+    /// <summary>
+    /// Adds an assembly to the messaging inbox policy profile discovery list.
+    /// </summary>
+    /// <param name="assembly">The assembly to scan.</param>
+    /// <returns>The same options instance for fluent configuration.</returns>
+    public SquirrelBoxMessagingOptions ScanAssembly(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        if (!ProfileAssemblies.Contains(assembly))
+            ProfileAssemblies.Add(assembly);
+
+        return this;
+    }
+
+    /// <summary>
+    /// Adds the assembly containing <typeparamref name="TMarker"/> to the messaging inbox policy profile discovery list.
+    /// </summary>
+    /// <typeparam name="TMarker">A marker type from the assembly to scan.</typeparam>
+    /// <returns>The same options instance for fluent configuration.</returns>
+    public SquirrelBoxMessagingOptions ScanAssemblyContaining<TMarker>()
+        => ScanAssembly(typeof(TMarker).Assembly);
 }

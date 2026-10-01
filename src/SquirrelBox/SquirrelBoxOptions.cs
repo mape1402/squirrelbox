@@ -15,7 +15,7 @@ public sealed class SquirrelBoxOptions
     /// <summary>
     /// Gets or sets the default lifetime assigned to newly opened inbox entries.
     /// </summary>
-    public TimeSpan? DefaultEntryLifetime { get; set; }
+    public TimeSpan? DefaultEntryLifetime { get; set; } = TimeSpan.FromHours(24);
 
     /// <summary>
     /// Gets or sets whether a semantic payload hash can be used as the idempotency key when no explicit key is received.
@@ -26,6 +26,20 @@ public sealed class SquirrelBoxOptions
     /// Gets or sets the owner name used when an open request does not provide one.
     /// </summary>
     public string DefaultOwner { get; set; } = "manual";
+
+    /// <summary>
+    /// Gets the default idempotency policy used when an entrypoint does not select a named policy.
+    /// </summary>
+    public InboxIdempotencyPolicy DefaultInboxPolicy { get; } = new()
+    {
+        Name = "default"
+    };
+
+    /// <summary>
+    /// Gets the named idempotency policies available to entrypoints.
+    /// </summary>
+    public IDictionary<string, InboxIdempotencyPolicy> InboxPolicies { get; } =
+        new Dictionary<string, InboxIdempotencyPolicy>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Gets the assemblies scanned for <see cref="InboxFingerprintProfile"/> implementations.
@@ -70,6 +84,33 @@ public sealed class SquirrelBoxOptions
         if (!OutboxProfileAssemblies.Contains(assembly))
             OutboxProfileAssemblies.Add(assembly);
 
+        return this;
+    }
+
+    /// <summary>
+    /// Adds or updates a named inbox idempotency policy.
+    /// </summary>
+    /// <param name="name">The policy name.</param>
+    /// <param name="configure">The policy configuration callback.</param>
+    /// <returns>The same options instance for fluent configuration.</returns>
+    public SquirrelBoxOptions AddInboxPolicy(
+        string name,
+        Action<InboxIdempotencyPolicy> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        if (!InboxPolicies.TryGetValue(name, out var policy))
+        {
+            policy = new InboxIdempotencyPolicy
+            {
+                Name = name
+            };
+            InboxPolicies[name] = policy;
+        }
+
+        configure(policy);
+        policy.Name = name;
         return this;
     }
 

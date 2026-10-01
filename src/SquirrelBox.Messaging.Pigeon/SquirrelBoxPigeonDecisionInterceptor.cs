@@ -54,6 +54,9 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
 
         var messageContext = CreateMessageContext(context, out var version);
         var open = await _messages.OpenAsync(messageContext, cancellationToken);
+        if (!open.Enabled)
+            return PigeonConsumeDecisionResult.Continue;
+
         AttachEffectiveMetadata(context, open.EffectiveMetadata);
 
         if (!open.ShouldExecute)

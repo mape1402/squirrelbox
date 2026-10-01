@@ -363,7 +363,7 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
-    public async Task OpenOrContinueAsync_reports_expired_for_duplicate_after_expiration()
+    public async Task OpenOrContinueAsync_reopens_duplicate_after_expiration()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
         var provider = CreateProvider(new SquirrelBoxOptions { DefaultEntryLifetime = TimeSpan.FromMinutes(5) }, clock);
@@ -381,8 +381,65 @@ public sealed class InboxServiceTests
             return await second.OpenOrContinueAsync(request);
         });
 
-        Assert.Equal(InboxOpenState.Expired, duplicate.State);
-        Assert.Equal(InboxStatus.Expired, duplicate.Entry.Status);
+        Assert.Equal(InboxOpenState.Opened, duplicate.State);
+        Assert.Equal(InboxStatus.Started, duplicate.Entry.Status);
+        Assert.True(duplicate.Accepted);
+    }
+
+    [Fact]
+    public async Task OpenOrContinueAsync_reopens_failed_entry_without_waiting_for_expiration()
+    {
+        var provider = CreateProvider(new SquirrelBoxOptions { DefaultEntryLifetime = TimeSpan.FromMinutes(5) }, new ManualTimeProvider(DateTimeOffset.UtcNow));
+        var request = InboxOpenRequest.For("http", "POST /orders", "order-failed", new TestPayload("order-failed"));
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var first = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            await first.OpenOrContinueAsync(request);
+            await first.FailCurrentAsync(new InvalidOperationException("boom"));
+        }
+
+        var reopened = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            var second = secondScope.ServiceProvider.GetRequiredService<IInboxService>();
+            return await second.OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.Opened, reopened.State);
+        Assert.Equal(InboxStatus.Started, reopened.Entry.Status);
+        Assert.True(reopened.Accepted);
+    }
+
+    [Fact]
+    public async Task OpenOrContinueAsync_keeps_completed_forever_locked_after_expiration_when_requested()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var provider = CreateProvider(new SquirrelBoxOptions { DefaultEntryLifetime = TimeSpan.FromMinutes(5) }, clock);
+        var request = InboxOpenRequest.For(
+            "http",
+            "POST /payments",
+            "payment-1",
+            new TestPayload("payment-1"),
+            completedLock: InboxCompletedLockMode.Forever);
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var first = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            await first.OpenOrContinueAsync(request);
+            await first.CompleteCurrentAsync();
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        var duplicate = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            var second = secondScope.ServiceProvider.GetRequiredService<IInboxService>();
+            return await second.OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.State);
+        Assert.Equal(InboxStatus.Completed, duplicate.Entry.Status);
         Assert.False(duplicate.Accepted);
     }
 
