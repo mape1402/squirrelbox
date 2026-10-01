@@ -29,4 +29,9 @@ public sealed class InboxIdempotencyPolicy
     /// Gets or sets whether payload hashes can be used as idempotency keys for entries using this policy.
     /// </summary>
     public bool? AllowPayloadHashAsIdempotencyKey { get; set; }
+
+    /// <summary>
+    /// Gets deferred execution settings for entries using this policy.
+    /// </summary>
+    public InboxDeferredPolicyOptions Deferred { get; } = new();
 }

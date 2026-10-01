@@ -20,6 +20,9 @@ public static class SquirrelBoxEventNames
     /// <summary>Indicates that an inbox entry failed.</summary>
     public const string InboxFailed = "InboxFailed";
 
+    /// <summary>Indicates that an inbox entry is waiting for a deferred retry.</summary>
+    public const string InboxRetrying = "InboxRetrying";
+
     /// <summary>Indicates that an outbox envelope was enqueued.</summary>
     public const string OutboxEnqueued = "OutboxEnqueued";
 

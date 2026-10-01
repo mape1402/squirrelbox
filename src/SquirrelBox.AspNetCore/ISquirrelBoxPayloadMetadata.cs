@@ -24,4 +24,14 @@ public interface ISquirrelBoxPayloadMetadata
     /// Gets how completed entries opened by the entrypoint block duplicates.
     /// </summary>
     InboxCompletedLockMode CompletedLock { get; }
+
+    /// <summary>
+    /// Gets an optional execution mode override selected by the entrypoint.
+    /// </summary>
+    InboxExecutionMode? ExecutionMode { get; }
+
+    /// <summary>
+    /// Gets optional deferred execution settings selected by the entrypoint.
+    /// </summary>
+    InboxDeferredPolicyOptions Deferred { get; }
 }

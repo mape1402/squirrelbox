@@ -141,6 +141,7 @@ public sealed class DefaultInbox : IInboxService
             ExecutionMode = request.ExecutionMode ?? policy.ExecutionMode ?? _options.DefaultExecutionMode,
             PolicyName = policy.Name,
             CompletedLock = completedLock,
+            Deferred = ResolveDeferred(request, policy),
             Status = InboxStatus.Started,
             CreatedOnUtc = now,
             UpdatedOnUtc = now,
@@ -286,6 +287,25 @@ public sealed class DefaultInbox : IInboxService
     }
 
     /// <inheritdoc />
+    public async ValueTask RetryCurrentAsync(InboxFailure failure, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        var context = GetRequiredContext();
+        var retryingOnUtc = _timeProvider.GetUtcNow();
+
+        await _transactionRunner.RunAsync(
+            token => _store.MarkRetryingAsync(context.Entry.Id, failure, retryingOnUtc, token),
+            cancellationToken);
+
+        context.Entry.Status = InboxStatus.Retrying;
+        context.Entry.Failure = failure.Details;
+        context.Entry.FailureDetails = failure;
+        context.Entry.UpdatedOnUtc = retryingOnUtc;
+        await PublishEventAsync(SquirrelBoxEventNames.InboxRetrying, context.Entry, cancellationToken);
+        RestorePreviousContext(context);
+    }
+
+    /// <inheritdoc />
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => _transactionRunner.RunAsync(token => _store.GetAsync(entryId, token), cancellationToken);
 
@@ -324,6 +344,46 @@ public sealed class DefaultInbox : IInboxService
         return policy.CompletedLock is InboxCompletedLockMode.Default
             ? InboxCompletedLockMode.UntilExpiration
             : policy.CompletedLock;
+    }
+
+    private static InboxDeferredExecutionOptions ResolveDeferred(
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        var policyDeferred = policy.Deferred;
+        var requestDeferred = request.Deferred;
+        var lane = ResolveDeferredLane(policy, requestDeferred);
+
+        return new InboxDeferredExecutionOptions
+        {
+            PolicyName = policy.Name,
+            Lane = lane,
+            MaxAttempts = requestDeferred?.MaxAttempts ?? policyDeferred.MaxAttempts,
+            Delay = requestDeferred?.Delay ?? policyDeferred.Delay,
+            MaxDelay = requestDeferred?.MaxDelay ?? policyDeferred.MaxDelay,
+            Backoff = requestDeferred?.Backoff ?? policyDeferred.Backoff,
+            JitterRatio = requestDeferred?.JitterRatio ?? policyDeferred.JitterRatio,
+            InProgressTimeout = requestDeferred?.InProgressTimeout ?? policyDeferred.InProgressTimeout
+        };
+    }
+
+    private static string ResolveDeferredLane(
+        InboxIdempotencyPolicy policy,
+        InboxDeferredPolicyOptions requestDeferred)
+    {
+        if (!string.IsNullOrWhiteSpace(requestDeferred?.Lane))
+            return requestDeferred.Lane;
+
+        if (!string.IsNullOrWhiteSpace(policy.Deferred.Lane))
+            return policy.Deferred.Lane;
+
+        if ((requestDeferred?.HasRetryConfiguration == true || policy.Deferred.HasRetryConfiguration) &&
+            !string.IsNullOrWhiteSpace(policy.Name))
+        {
+            return $"squirrelbox.{policy.Name}";
+        }
+
+        return null;
     }
 
     private InboxContext GetRequiredContext()

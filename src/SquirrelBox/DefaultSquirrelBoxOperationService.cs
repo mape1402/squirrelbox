@@ -89,7 +89,19 @@ public sealed class DefaultSquirrelBoxOperationService : ISquirrelBoxOperationSe
             return CreateNonExecutingResult<TResult>(decision, open.Context);
 
         if (open.Context.Entry.ExecutionMode == InboxExecutionMode.Deferred)
-            return await ScheduleDeferredAsync<TRequest, TResult>(operationType, request, decision, open.Context, cancellationToken);
+        {
+            try
+            {
+                return await ScheduleDeferredAsync<TRequest, TResult>(operationType, request, decision, open.Context, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                if (open.State == InboxOpenState.Opened && ReferenceEquals(_inbox.Current, open.Context))
+                    await _inbox.FailCurrentAsync(exception, cancellationToken);
+
+                throw;
+            }
+        }
 
         try
         {

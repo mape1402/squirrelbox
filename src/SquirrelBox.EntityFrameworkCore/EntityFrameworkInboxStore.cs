@@ -123,6 +123,24 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     }
 
     /// <inheritdoc />
+    public async ValueTask MarkRetryingAsync(
+        Ulid entryId,
+        InboxFailure failure,
+        DateTimeOffset retryingOnUtc,
+        CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = _dbContextFactory.CreateDbContext();
+        var record = await FindByIdAsync(dbContext, entryId, cancellationToken);
+
+        record.Status = InboxStatus.Retrying.ToString();
+        record.Failure = failure?.Details;
+        record.FailureDetailsJson = Serialize(failure);
+        record.UpdatedOnUtc = retryingOnUtc;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
     {
         await using var dbContext = _dbContextFactory.CreateDbContext();
@@ -194,16 +212,18 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         InboxOpenState state;
 
         var isExpired = IsExpired(entry, incoming.CreatedOnUtc);
+        var isActiveTimedOut = IsActiveTimedOut(entry, incoming.CreatedOnUtc);
         var completedForever = IsCompletedForever(entry);
 
         if ((!isExpired || completedForever) &&
+            !isActiveTimedOut &&
             !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
             !string.IsNullOrWhiteSpace(incoming.PayloadHash) &&
             !string.Equals(entry.PayloadHash, incoming.PayloadHash, StringComparison.Ordinal))
         {
             state = InboxOpenState.PayloadConflict;
         }
-        else if (ShouldReopen(entry, isExpired))
+        else if (ShouldReopen(entry, isExpired, isActiveTimedOut))
         {
             state = InboxOpenState.Opened;
             Reopen(existing, incoming, preserveCorrelation: entry.Status is InboxStatus.Failed && !isExpired);
@@ -241,14 +261,32 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         };
 
     private static bool IsExpired(InboxEntry entry, DateTimeOffset now)
-        => entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= now;
+        => !IsActive(entry) &&
+           entry.ExpiresOnUtc is { } expiresOnUtc &&
+           expiresOnUtc <= now;
+
+    private static bool IsActive(InboxEntry entry)
+        => entry.Status is InboxStatus.Started or InboxStatus.Retrying;
+
+    private static bool IsActiveTimedOut(InboxEntry entry, DateTimeOffset now)
+    {
+        if (!IsActive(entry) ||
+            entry.Deferred?.InProgressTimeout is not { } timeout ||
+            timeout <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        return entry.UpdatedOnUtc.Add(timeout) <= now;
+    }
 
     private static bool IsCompletedForever(InboxEntry entry)
         => entry.Status is InboxStatus.Completed &&
            entry.CompletedLock is InboxCompletedLockMode.Forever;
 
-    private static bool ShouldReopen(InboxEntry entry, bool isExpired)
+    private static bool ShouldReopen(InboxEntry entry, bool isExpired, bool isActiveTimedOut)
         => entry.Status is InboxStatus.Failed ||
+           isActiveTimedOut ||
            (isExpired && !IsCompletedForever(entry));
 
     private static void Reopen(
@@ -273,6 +311,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         existing.ExecutionMode = incoming.ExecutionMode.ToString();
         existing.PolicyName = incoming.PolicyName;
         existing.CompletedLock = ResolveCompletedLock(incoming.CompletedLock).ToString();
+        ApplyDeferred(existing, incoming.Deferred);
         existing.CreatedOnUtc = incoming.CreatedOnUtc;
         existing.UpdatedOnUtc = incoming.UpdatedOnUtc;
         existing.CompletedOnUtc = null;
@@ -305,6 +344,14 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             ExecutionMode = entry.ExecutionMode.ToString(),
             PolicyName = entry.PolicyName,
             CompletedLock = ResolveCompletedLock(entry.CompletedLock).ToString(),
+            DeferredPolicyName = entry.Deferred?.PolicyName,
+            DeferredLane = entry.Deferred?.Lane,
+            DeferredMaxAttempts = entry.Deferred?.MaxAttempts,
+            DeferredDelayMilliseconds = ToMilliseconds(entry.Deferred?.Delay),
+            DeferredMaxDelayMilliseconds = ToMilliseconds(entry.Deferred?.MaxDelay),
+            DeferredBackoff = entry.Deferred?.Backoff?.ToString(),
+            DeferredJitterRatio = entry.Deferred?.JitterRatio,
+            DeferredInProgressTimeoutMilliseconds = ToMilliseconds(entry.Deferred?.InProgressTimeout),
             CreatedOnUtc = entry.CreatedOnUtc,
             UpdatedOnUtc = entry.UpdatedOnUtc,
             CompletedOnUtc = entry.CompletedOnUtc,
@@ -337,6 +384,17 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             ExecutionMode = Enum.Parse<InboxExecutionMode>(record.ExecutionMode),
             PolicyName = record.PolicyName,
             CompletedLock = ParseCompletedLock(record.CompletedLock),
+            Deferred = new InboxDeferredExecutionOptions
+            {
+                PolicyName = record.DeferredPolicyName,
+                Lane = record.DeferredLane,
+                MaxAttempts = record.DeferredMaxAttempts,
+                Delay = FromMilliseconds(record.DeferredDelayMilliseconds),
+                MaxDelay = FromMilliseconds(record.DeferredMaxDelayMilliseconds),
+                Backoff = ParseDeferredBackoff(record.DeferredBackoff),
+                JitterRatio = record.DeferredJitterRatio,
+                InProgressTimeout = FromMilliseconds(record.DeferredInProgressTimeoutMilliseconds)
+            },
             CreatedOnUtc = record.CreatedOnUtc,
             UpdatedOnUtc = record.UpdatedOnUtc,
             CompletedOnUtc = record.CompletedOnUtc,
@@ -393,6 +451,31 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         => string.IsNullOrWhiteSpace(value)
             ? InboxCompletedLockMode.UntilExpiration
             : ResolveCompletedLock(Enum.Parse<InboxCompletedLockMode>(value));
+
+    private static void ApplyDeferred(
+        SquirrelBoxInboxEntryRecord record,
+        InboxDeferredExecutionOptions deferred)
+    {
+        record.DeferredPolicyName = deferred?.PolicyName;
+        record.DeferredLane = deferred?.Lane;
+        record.DeferredMaxAttempts = deferred?.MaxAttempts;
+        record.DeferredDelayMilliseconds = ToMilliseconds(deferred?.Delay);
+        record.DeferredMaxDelayMilliseconds = ToMilliseconds(deferred?.MaxDelay);
+        record.DeferredBackoff = deferred?.Backoff?.ToString();
+        record.DeferredJitterRatio = deferred?.JitterRatio;
+        record.DeferredInProgressTimeoutMilliseconds = ToMilliseconds(deferred?.InProgressTimeout);
+    }
+
+    private static long? ToMilliseconds(TimeSpan? value)
+        => value is null ? null : Convert.ToInt64(value.Value.TotalMilliseconds);
+
+    private static TimeSpan? FromMilliseconds(long? value)
+        => value is null ? null : TimeSpan.FromMilliseconds(value.Value);
+
+    private static InboxRetryBackoff? ParseDeferredBackoff(string value)
+        => string.IsNullOrWhiteSpace(value)
+            ? null
+            : Enum.Parse<InboxRetryBackoff>(value);
 
     private static string Serialize<T>(T value)
         => value is null ? null : JsonSerializer.Serialize(value, JsonOptions);

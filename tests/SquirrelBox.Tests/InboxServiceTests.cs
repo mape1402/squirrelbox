@@ -106,6 +106,34 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task RetryCurrentAsync_marks_retrying_and_keeps_duplicate_in_progress()
+    {
+        var provider = CreateProvider();
+        var inbox = provider.GetRequiredService<IInboxService>();
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-retry",
+            new TestPayload("order-retry")));
+
+        await inbox.RetryCurrentAsync(InboxFailure.FromException(new InvalidOperationException("retry me")));
+        var stored = await inbox.GetAsync(opened.Entry.Id);
+
+        var duplicate = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var scope = provider.CreateScope();
+            return await scope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(InboxOpenRequest.For("http", "POST /orders", "order-retry", new TestPayload("order-retry")));
+        });
+
+        Assert.Null(inbox.Current);
+        Assert.Equal(InboxStatus.Retrying, stored.Status);
+        Assert.Equal("retry me", stored.FailureDetails.ErrorMessage);
+        Assert.Equal(InboxOpenState.DuplicateInProgress, duplicate.State);
+        Assert.False(duplicate.Accepted);
+    }
+
+    [Fact]
     public async Task ReleaseCurrent_clears_context_without_completing_or_failing_entry()
     {
         var inbox = CreateInbox();
@@ -372,6 +400,7 @@ public sealed class InboxServiceTests
         using var firstScope = provider.CreateScope();
         var first = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
         await first.OpenOrContinueAsync(request);
+        await first.CompleteCurrentAsync();
         clock.Advance(TimeSpan.FromMinutes(6));
 
         var duplicate = await RunWithoutAmbientContextAsync(async () =>
@@ -404,6 +433,66 @@ public sealed class InboxServiceTests
             using var secondScope = provider.CreateScope();
             var second = secondScope.ServiceProvider.GetRequiredService<IInboxService>();
             return await second.OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.Opened, reopened.State);
+        Assert.Equal(InboxStatus.Started, reopened.Entry.Status);
+        Assert.True(reopened.Accepted);
+    }
+
+    [Fact]
+    public async Task OpenOrContinueAsync_keeps_active_entry_in_progress_after_entry_lifetime_expires()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var provider = CreateProvider(new SquirrelBoxOptions { DefaultEntryLifetime = TimeSpan.FromMinutes(5) }, clock);
+        var request = InboxOpenRequest.For("http", "POST /orders", "order-active", new TestPayload("order-active"));
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        var duplicate = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            return await secondScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.DuplicateInProgress, duplicate.State);
+        Assert.Equal(InboxStatus.Started, duplicate.Entry.Status);
+        Assert.False(duplicate.Accepted);
+    }
+
+    [Fact]
+    public async Task OpenOrContinueAsync_reopens_active_entry_after_in_progress_timeout()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var provider = CreateProvider(new SquirrelBoxOptions { DefaultEntryLifetime = TimeSpan.FromMinutes(5) }, clock);
+        var request = InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-active-timeout",
+            new TestPayload("order-active-timeout"),
+            deferred: new InboxDeferredPolicyOptions
+            {
+                InProgressTimeout = TimeSpan.FromMinutes(1)
+            });
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var reopened = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            return await secondScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
         });
 
         Assert.Equal(InboxOpenState.Opened, reopened.State);

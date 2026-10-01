@@ -75,6 +75,14 @@ public interface IInboxService
     ValueTask FailCurrentAsync(InboxFailure failure, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Marks the current inbox context as retrying after a non-terminal deferred failure.
+    /// </summary>
+    /// <param name="failure">The failure details.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A task that completes when the entry is marked retrying.</returns>
+    ValueTask RetryCurrentAsync(InboxFailure failure, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads an inbox entry by ULID.
     /// </summary>
     /// <param name="entryId">The entry id.</param>

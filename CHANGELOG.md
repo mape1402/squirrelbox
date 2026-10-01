@@ -4,6 +4,22 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v3.2.0] - 2026-10-01
+
+### Added
+
+- Added per-entrypoint deferred retry settings for inbox policies, HTTP payload endpoints, and messaging policy profiles.
+- Added `Retrying` inbox status plus `IInboxService.RetryCurrentAsync` so non-terminal Mule failures no longer mark deferred inbox entries as terminal failures.
+- Added Mule lane/retry auto-configuration from SquirrelBox inbox policies, including retry metadata on durable actions.
+- Added active-entry `InProgressTimeout` handling so long-running or retrying deferred work is not reopened by normal idempotency TTL, but can be recovered explicitly after a configured timeout.
+- Added SQL Server, Mule worker, HTTP payload, messaging profile, and core unit/e2e coverage for deferred retry policies.
+
+### Changed
+
+- Changed deferred Mule action failure handling to keep entries in `Retrying` while Mule still has attempts available, and mark `Failed` only when the durable action reaches its terminal attempt.
+- Changed operation and Pigeon deferred scheduling failures to mark the current inbox entry as failed immediately when the durable action cannot be scheduled.
+- Updated the sample app and README to show deferred inbox policies with lanes, retry attempts, backoff, and in-progress timeout.
+
 ## [v3.1.0] - 2026-10-01
 
 ### Added

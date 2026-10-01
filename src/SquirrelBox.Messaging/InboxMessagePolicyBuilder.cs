@@ -101,6 +101,25 @@ public sealed class InboxMessagePolicyBuilder
     }
 
     /// <summary>
+    /// Sets the policy to defer accepted message execution.
+    /// </summary>
+    /// <returns>The same builder for chaining.</returns>
+    public InboxMessagePolicyBuilder DeferExecution()
+        => WithExecutionMode(InboxExecutionMode.Deferred);
+
+    /// <summary>
+    /// Configures deferred execution settings for entries opened by this policy.
+    /// </summary>
+    /// <param name="configure">The deferred execution configuration callback.</param>
+    /// <returns>The same builder for chaining.</returns>
+    public InboxMessagePolicyBuilder WithDeferred(Action<InboxDeferredPolicyOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_policy.Deferred);
+        return this;
+    }
+
+    /// <summary>
     /// Sets whether payload hashes can be used as idempotency keys for this policy.
     /// </summary>
     /// <param name="enabled">Whether payload-hash keys are enabled.</param>

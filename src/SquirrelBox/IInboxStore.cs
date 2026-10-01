@@ -26,6 +26,11 @@ public interface IInboxStore
     ValueTask MarkFailedAsync(Ulid entryId, InboxFailure failure, DateTimeOffset failedOnUtc, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Marks an inbox entry as waiting for a deferred retry.
+    /// </summary>
+    ValueTask MarkRetryingAsync(Ulid entryId, InboxFailure failure, DateTimeOffset retryingOnUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets an inbox entry by id.
     /// </summary>
     ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default);

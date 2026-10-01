@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="3.1.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="3.1.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.1.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.1.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="3.1.0" />
+<PackageReference Include="SquirrelBox" Version="3.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="3.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.2.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.2.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="3.2.0" />
 ```
 
 ## Getting Started
@@ -54,6 +54,15 @@ services
         options.AddInboxPolicy("payments", policy =>
         {
             policy.CompletedLock = InboxCompletedLockMode.Forever;
+        });
+        options.AddInboxPolicy("orders-deferred", policy =>
+        {
+            policy.ExecutionMode = InboxExecutionMode.Deferred;
+            policy.Deferred.Lane = "orders-deferred";
+            policy.Deferred.MaxAttempts = 3;
+            policy.Deferred.Delay = TimeSpan.FromSeconds(2);
+            policy.Deferred.Backoff = InboxRetryBackoff.Exponential;
+            policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(10);
         });
     })
     .UseEntityFramework<AppDbContext>();
@@ -203,7 +212,26 @@ if (result.Executed)
 return Results.Conflict(result.Decision);
 ```
 
-When execution is deferred, SquirrelBox stores the inbox entry first, schedules a Mule durable action, and completes/fails the inbox later from a worker scope.
+When execution is deferred, SquirrelBox stores the inbox entry first, schedules a Mule durable action, and completes/fails the inbox later from a worker scope. Deferred retry behavior is part of the selected inbox policy:
+
+```csharp
+options.AddInboxPolicy("orders-deferred", policy =>
+{
+    policy.ExecutionMode = InboxExecutionMode.Deferred;
+    policy.Deferred.Lane = "orders-deferred";
+    policy.Deferred.MaxAttempts = 5;
+    policy.Deferred.Delay = TimeSpan.FromSeconds(5);
+    policy.Deferred.MaxDelay = TimeSpan.FromMinutes(1);
+    policy.Deferred.Backoff = InboxRetryBackoff.Exponential;
+    policy.Deferred.JitterRatio = 0.10;
+    policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(15);
+});
+```
+
+While Mule still has attempts available, SquirrelBox marks the inbox entry as `Retrying`.
+Only the terminal Mule failure marks the entry as `Failed`. Normal `EntryLifetime` controls
+the duplicate window for terminal entries; active entries stay in progress until they
+complete/fail or pass the configured `InProgressTimeout`.
 
 ## Outbox
 
@@ -335,6 +363,30 @@ public async Task<ActionResult> CreatePayment(CreatePaymentRequest request)
 }
 ```
 
+MVC actions can also declare deferred entrypoint settings directly:
+
+```csharp
+[HttpPost("orders/deferred")]
+[SquirrelBoxPayload(
+    Policy = "orders-deferred",
+    DeferExecution = true,
+    DeferredLane = "orders-deferred",
+    RetryMaxAttempts = 3,
+    RetryDelaySeconds = 2,
+    RetryBackoff = InboxRetryBackoff.Exponential,
+    InProgressTimeoutSeconds = 600)]
+public async Task<ActionResult> CreateDeferred(CreateOrderRequest request)
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        HttpContext.RequestAborted);
+
+    return result.Deferred
+        ? Accepted($"/inbox/{result.Context.Entry.Id}", result.Context.Entry.Id)
+        : Created($"/orders/{result.Result.Id}", result.Result);
+}
+```
+
 For Minimal APIs, attach the endpoint filter:
 
 ```csharp
@@ -368,6 +420,17 @@ app.MapPost("/payments", HandlePayment)
    {
        options.PolicyName = "payments";
        options.CompletedLock = InboxCompletedLockMode.Forever;
+   });
+
+app.MapPost("/orders/deferred", HandleDeferredOrder)
+   .WithSquirrelBoxPayload(options =>
+   {
+       options.PolicyName = "orders-deferred";
+       options.ExecutionMode = InboxExecutionMode.Deferred;
+       options.Deferred.Lane = "orders-deferred";
+       options.Deferred.MaxAttempts = 3;
+       options.Deferred.Delay = TimeSpan.FromSeconds(2);
+       options.Deferred.InProgressTimeout = TimeSpan.FromMinutes(10);
    });
 ```
 
@@ -525,10 +588,6 @@ services.AddSquirrelBoxPigeon(options =>
 {
     options.Transport = "pigeon";
     options.EnableOutbox = true;
-    options.ExecutionModeResolver = context =>
-        context.Topic == "orders.deferred"
-            ? InboxExecutionMode.Deferred
-            : InboxExecutionMode.Inline;
 });
 ```
 
@@ -537,6 +596,30 @@ Consume:
 - Decision interceptor opens the inbox before the consumer handler only when a messaging inbox profile matches the topic/version/subscription/operation.
 - Execution interceptor completes or fails the inbox after the handler.
 - Deferred replay uses `IPigeonConsumerInvoker`.
+
+Messaging policies can select core policies or configure deferred retry settings directly:
+
+```csharp
+public sealed class OrdersMessageInboxProfile : InboxMessagePolicyProfile
+{
+    public override void Configure(InboxMessagePolicyProfileBuilder builder)
+    {
+        builder.Match(topic: "orders.deferred", version: "1.0.0", subscription: "billing")
+            .UseCorePolicy("orders-deferred");
+
+        builder.ForTopic("orders.priority")
+            .DeferExecution()
+            .WithDeferred(deferred =>
+            {
+                deferred.Lane = "orders-priority";
+                deferred.MaxAttempts = 5;
+                deferred.Delay = TimeSpan.FromSeconds(1);
+                deferred.Backoff = InboxRetryBackoff.Linear;
+                deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
+            });
+    }
+}
+```
 
 Publish:
 
@@ -558,7 +641,7 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 ```
 
-SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, and the structured `SquirrelBoxMetadata` section.
+SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, retry policy metadata, and the structured `SquirrelBoxMetadata` section. When an inbox policy configures deferred retries, `AddSquirrelBoxMule()` creates or updates the Mule lane retry policy automatically. User Mule configuration can still override lane behavior by configuring the same lane after SquirrelBox registration.
 
 ## Sample
 
