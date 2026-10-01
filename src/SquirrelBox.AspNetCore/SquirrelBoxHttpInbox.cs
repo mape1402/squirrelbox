@@ -85,10 +85,11 @@ internal static class SquirrelBoxHttpInbox
             TraceIdName = traceId.Name,
             AttemptIdName = ResolveDefaultName(options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),
             Owner = owner ?? options.Owner,
-            ExecutionMode = executionMode ?? options.ExecutionModeResolver(httpContext),
+            ExecutionMode = payloadMetadata?.ExecutionMode ?? executionMode ?? options.ExecutionModeResolver(httpContext),
             PolicyName = payloadMetadata?.PolicyName,
             EntryLifetime = payloadMetadata?.EntryLifetime,
-            CompletedLock = payloadMetadata?.CompletedLock ?? InboxCompletedLockMode.Default
+            CompletedLock = payloadMetadata?.CompletedLock ?? InboxCompletedLockMode.Default,
+            Deferred = payloadMetadata?.Deferred
         };
     }
 

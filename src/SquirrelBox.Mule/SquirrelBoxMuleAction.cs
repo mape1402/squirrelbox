@@ -47,7 +47,13 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
         catch (Exception exception)
         {
             if (ReferenceEquals(_inbox.Current, inboxContext))
-                await _inbox.FailCurrentAsync(exception, cancellationToken);
+            {
+                var failure = InboxFailure.FromException(exception);
+                if (IsTerminalAttempt(context))
+                    await _inbox.FailCurrentAsync(failure, cancellationToken);
+                else
+                    await _inbox.RetryCurrentAsync(failure, cancellationToken);
+            }
 
             throw;
         }
@@ -93,5 +99,21 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
                 $"Mule action metadata '{SquirrelBoxMuleMetadata.InboxEntryId}' is not a valid ULID.",
                 exception);
         }
+    }
+
+    private static bool IsTerminalAttempt(MuleActionContext<TPayload> context)
+    {
+        if (!context.Metadata.TryGetValue(SquirrelBoxMuleMetadata.DeferredMaxAttempts, out var rawMaxAttempts) ||
+            !int.TryParse(rawMaxAttempts, out var maxAttempts) ||
+            maxAttempts <= 1)
+        {
+            return true;
+        }
+
+        var currentAttempt = context.Action?.Attempts ?? 0;
+        if (currentAttempt <= 0)
+            currentAttempt = 1;
+
+        return currentAttempt >= maxAttempts;
     }
 }

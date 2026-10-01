@@ -35,6 +35,24 @@ builder.Services
     .AddSquirrelBox(options =>
     {
         options.DefaultEntryLifetime = TimeSpan.FromHours(24);
+        options.AddInboxPolicy("orders-deferred", policy =>
+        {
+            policy.ExecutionMode = InboxExecutionMode.Deferred;
+            policy.Deferred.Lane = "orders-deferred";
+            policy.Deferred.MaxAttempts = 3;
+            policy.Deferred.Delay = TimeSpan.FromMilliseconds(100);
+            policy.Deferred.Backoff = InboxRetryBackoff.Exponential;
+            policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
+        });
+        options.AddInboxPolicy("pigeon-deferred", policy =>
+        {
+            policy.ExecutionMode = InboxExecutionMode.Deferred;
+            policy.Deferred.Lane = "pigeon-deferred";
+            policy.Deferred.MaxAttempts = 3;
+            policy.Deferred.Delay = TimeSpan.FromMilliseconds(100);
+            policy.Deferred.Backoff = InboxRetryBackoff.Linear;
+            policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
+        });
         options.ScanAssemblyContaining<OrderFingerprintProfile>();
     })
     .UseInMemory();
@@ -72,10 +90,6 @@ var pigeon = builder.Services.AddPigeon(builder.Configuration, settings =>
 builder.Services.AddSquirrelBoxPigeon(options =>
 {
     options.EnableOutbox = true;
-    options.ExecutionModeResolver = context =>
-        string.Equals(context.Topic, SamplePigeonRoutes.DeferredTopic, StringComparison.OrdinalIgnoreCase)
-            ? InboxExecutionMode.Deferred
-            : InboxExecutionMode.Inline;
 });
 
 builder.Services.AddSquirrelBoxDashboard(options =>
@@ -121,7 +135,7 @@ app.MapGet("/", () => Results.Ok(new
         "POST /orders/computed-key opens HTTP inbox from the bound payload and returns a computed Idempotency-Key.",
         "POST /orders/window uses a short idempotency window and accepts the same payload again after the window expires.",
         "POST /orders/forever keeps completed duplicates locked forever for payment-style entrypoints.",
-        "POST /orders/deferred schedules the declared operation through Mule.",
+        "POST /orders/deferred schedules the declared operation through Mule with retry policy.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
         "POST /outbox/direct enqueues transport-agnostic sample outbox work.",
@@ -197,26 +211,16 @@ app.MapPost("/orders/forever", async (
 
 app.MapPost("/orders/deferred", async (
     CreateOrderRequest request,
-    HttpContext http,
-    IInboxService inbox,
     ISquirrelBoxOperationService operations,
     CancellationToken cancellationToken) =>
 {
-    var open = await http.OpenSquirrelBoxAsync(
-        inbox,
-        request,
-        executionMode: InboxExecutionMode.Deferred,
-        cancellationToken: cancellationToken);
-
-    if (!open.Accepted)
-        return Results.Conflict(InboxRejectedResponse.From(open));
-
     var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
         request,
         cancellationToken);
 
     return ToHttpResult(result);
-});
+})
+.WithSquirrelBoxPayload(options => options.PolicyName = "orders-deferred");
 
 app.MapPost("/pigeon/inline", async (
     OrderMessage message,
@@ -285,6 +289,15 @@ app.MapGet("/inbox/{entryId}", async (
         entry.CorrelationId,
         entry.CompletedOnUtc,
         entry.Failure,
+        deferred = new
+        {
+            entry.Deferred.PolicyName,
+            entry.Deferred.Lane,
+            entry.Deferred.MaxAttempts,
+            entry.Deferred.Delay,
+            entry.Deferred.Backoff,
+            entry.Deferred.InProgressTimeout
+        },
         entry.Completion?.Metadata
     });
 });
@@ -398,7 +411,7 @@ public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
         builder.ForTopic(SamplePigeonRoutes.InlineTopic);
         builder
             .ForTopic(SamplePigeonRoutes.DeferredTopic)
-            .WithExecutionMode(InboxExecutionMode.Deferred);
+            .UseCorePolicy("pigeon-deferred");
     }
 }
 

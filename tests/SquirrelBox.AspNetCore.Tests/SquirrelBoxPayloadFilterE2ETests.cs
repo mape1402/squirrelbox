@@ -167,6 +167,25 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
     }
 
     [Fact]
+    public async Task Mvc_attribute_applies_deferred_entrypoint_settings()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/payload-orders/deferred", new PayloadOrderRequest("mvc-deferred"));
+        var body = await response.Content.ReadAsStringAsync();
+
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(InboxExecutionMode.Deferred.ToString(), document.RootElement.GetProperty("executionMode").GetString());
+        Assert.Equal("mvc-deferred", document.RootElement.GetProperty("lane").GetString());
+        Assert.Equal(5, document.RootElement.GetProperty("maxAttempts").GetInt32());
+        Assert.Equal(1000, document.RootElement.GetProperty("delayMs").GetInt32());
+        Assert.Equal(InboxRetryBackoff.Linear.ToString(), document.RootElement.GetProperty("backoff").GetString());
+        Assert.Equal(30000, document.RootElement.GetProperty("inProgressTimeoutMs").GetInt32());
+    }
+
+    [Fact]
     public async Task Minimal_api_filter_opens_from_bound_payload_when_key_header_is_missing()
     {
         using var server = CreateServer();
@@ -180,6 +199,25 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
         Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("Correlation-Id").Single()));
         Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("SquirrelBox-Attempt-Id").Single()));
         Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("Trace-Id").Single()));
+    }
+
+    [Fact]
+    public async Task Minimal_api_filter_applies_deferred_entrypoint_settings()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/minimal-deferred-orders", new PayloadOrderRequest("minimal-deferred"));
+        var body = await response.Content.ReadAsStringAsync();
+
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(InboxExecutionMode.Deferred.ToString(), document.RootElement.GetProperty("executionMode").GetString());
+        Assert.Equal("minimal-deferred", document.RootElement.GetProperty("lane").GetString());
+        Assert.Equal(4, document.RootElement.GetProperty("maxAttempts").GetInt32());
+        Assert.Equal(250, document.RootElement.GetProperty("delayMs").GetInt32());
+        Assert.Equal(InboxRetryBackoff.Exponential.ToString(), document.RootElement.GetProperty("backoff").GetString());
+        Assert.Equal(45000, document.RootElement.GetProperty("inProgressTimeoutMs").GetInt32());
     }
 
     [Fact]
@@ -282,6 +320,32 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                         .WithSquirrelBoxPayload();
 
                     endpoints
+                        .MapPost("/minimal-deferred-orders", (PayloadOrderRequest request, IInboxService inbox) =>
+                        {
+                            var entry = inbox.Current.Entry;
+                            inbox.ReleaseCurrent();
+                            return Results.Ok(new
+                            {
+                                request.Id,
+                                ExecutionMode = entry.ExecutionMode.ToString(),
+                                entry.Deferred.Lane,
+                                entry.Deferred.MaxAttempts,
+                                DelayMs = Convert.ToInt32(entry.Deferred.Delay?.TotalMilliseconds),
+                                Backoff = entry.Deferred.Backoff?.ToString(),
+                                InProgressTimeoutMs = Convert.ToInt32(entry.Deferred.InProgressTimeout?.TotalMilliseconds)
+                            });
+                        })
+                        .WithSquirrelBoxPayload(options =>
+                        {
+                            options.ExecutionMode = InboxExecutionMode.Deferred;
+                            options.Deferred.Lane = "minimal-deferred";
+                            options.Deferred.MaxAttempts = 4;
+                            options.Deferred.Delay = TimeSpan.FromMilliseconds(250);
+                            options.Deferred.Backoff = InboxRetryBackoff.Exponential;
+                            options.Deferred.InProgressTimeout = TimeSpan.FromSeconds(45);
+                        });
+
+                    endpoints
                         .MapPost("/minimal-window-orders", (PayloadOrderRequest request) =>
                             Results.Created(
                                 $"/minimal-window-orders/{request.Id}",
@@ -343,10 +407,12 @@ public sealed record PayloadOrderRequest(string Id);
 public sealed class PayloadOrdersController : ControllerBase
 {
     private readonly PayloadExecutionCounter _counter;
+    private readonly IInboxService _inbox;
 
-    public PayloadOrdersController(PayloadExecutionCounter counter)
+    public PayloadOrdersController(PayloadExecutionCounter counter, IInboxService inbox)
     {
         _counter = counter;
+        _inbox = inbox;
     }
 
     [HttpPost]
@@ -386,6 +452,30 @@ public sealed class PayloadOrdersController : ControllerBase
                 request.Id,
                 Execution = _counter.NextForever()
             });
+
+    [HttpPost("deferred")]
+    [SquirrelBoxPayload(
+        DeferExecution = true,
+        DeferredLane = "mvc-deferred",
+        RetryMaxAttempts = 5,
+        RetryDelaySeconds = 1,
+        RetryBackoff = InboxRetryBackoff.Linear,
+        InProgressTimeoutSeconds = 30)]
+    public IActionResult Deferred(PayloadOrderRequest request)
+    {
+        var entry = _inbox.Current.Entry;
+        _inbox.ReleaseCurrent();
+        return Ok(new
+        {
+            request.Id,
+            ExecutionMode = entry.ExecutionMode.ToString(),
+            entry.Deferred.Lane,
+            entry.Deferred.MaxAttempts,
+            DelayMs = Convert.ToInt32(entry.Deferred.Delay?.TotalMilliseconds),
+            Backoff = entry.Deferred.Backoff?.ToString(),
+            InProgressTimeoutMs = Convert.ToInt32(entry.Deferred.InProgressTimeout?.TotalMilliseconds)
+        });
+    }
 }
 
 public sealed class PayloadExecutionCounter

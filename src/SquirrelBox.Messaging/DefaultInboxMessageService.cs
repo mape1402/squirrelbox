@@ -72,6 +72,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             PolicyName = policy.CorePolicyName,
             EntryLifetime = policy.EntryLifetime,
             CompletedLock = policy.CompletedLock,
+            Deferred = policy.Deferred,
             AllowPayloadHashAsIdempotencyKey = policy.AllowPayloadHashAsIdempotencyKey ?? _options.AllowPayloadHashAsIdempotencyKey,
             Metadata = metadata
         };

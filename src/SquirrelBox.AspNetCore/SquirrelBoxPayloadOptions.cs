@@ -24,4 +24,14 @@ public sealed class SquirrelBoxPayloadOptions
     /// Gets or sets how completed entries opened by this entrypoint block duplicates.
     /// </summary>
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
+
+    /// <summary>
+    /// Gets or sets an optional execution mode override selected by this entrypoint.
+    /// </summary>
+    public InboxExecutionMode? ExecutionMode { get; set; }
+
+    /// <summary>
+    /// Gets deferred execution settings selected by this entrypoint.
+    /// </summary>
+    public InboxDeferredPolicyOptions Deferred { get; } = new();
 }

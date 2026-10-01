@@ -55,6 +55,11 @@ public sealed class InboxMessagePolicy
     /// </summary>
     public bool? AllowPayloadHashAsIdempotencyKey { get; set; }
 
+    /// <summary>
+    /// Gets deferred execution settings selected by this messaging policy.
+    /// </summary>
+    public InboxDeferredPolicyOptions Deferred { get; } = new();
+
     internal int Order { get; set; }
 
     internal bool Matches(InboxMessageContext context)

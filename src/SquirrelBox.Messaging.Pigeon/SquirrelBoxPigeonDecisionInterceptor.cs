@@ -68,10 +68,20 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
             envelope.Metadata[SquirrelBoxPigeonMetadataNames.Version] = version.ToString();
             open.EffectiveMetadata.WriteTo(envelope.Metadata);
 
-            await _scheduler.EnqueueCurrentAsync(
-                SquirrelBoxPigeonMuleActionKeys.ConsumeKey,
-                envelope,
-                cancellationToken: cancellationToken);
+            try
+            {
+                await _scheduler.EnqueueCurrentAsync(
+                    SquirrelBoxPigeonMuleActionKeys.ConsumeKey,
+                    envelope,
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                if (_inbox.Current is not null)
+                    await _inbox.FailCurrentAsync(exception, cancellationToken);
+
+                throw;
+            }
 
             if (_inbox.Current is not null)
                 _inbox.ReleaseCurrent();

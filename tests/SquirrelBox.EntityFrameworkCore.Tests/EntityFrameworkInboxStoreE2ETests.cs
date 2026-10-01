@@ -157,6 +157,124 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.True(reopened.Accepted);
     }
 
+    [Fact]
+    public async Task SqlServer_store_persists_deferred_options_and_retrying_state()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(
+            connectionString,
+            configure: options => options.AddInboxPolicy("orders-deferred", policy =>
+            {
+                policy.ExecutionMode = InboxExecutionMode.Deferred;
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.MaxAttempts = 3;
+                policy.Deferred.Delay = TimeSpan.FromSeconds(1);
+                policy.Deferred.MaxDelay = TimeSpan.FromSeconds(5);
+                policy.Deferred.Backoff = InboxRetryBackoff.Exponential;
+                policy.Deferred.JitterRatio = 0.25;
+                policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(2);
+            }));
+        await EnsureDatabaseAsync(provider);
+        Ulid entryId;
+
+        using (var scope = provider.CreateScope())
+        {
+            var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+            var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders/deferred",
+                "order-deferred-options",
+                new TestPayload("order-deferred-options"),
+                executionMode: InboxExecutionMode.Deferred,
+                policyName: "orders-deferred"));
+
+            entryId = opened.Entry.Id;
+            await inbox.RetryCurrentAsync(InboxFailure.FromException(new InvalidOperationException("try again")));
+        }
+
+        using var verificationScope = provider.CreateScope();
+        var stored = await verificationScope.ServiceProvider.GetRequiredService<IInboxService>()
+            .GetAsync(entryId);
+
+        Assert.Equal(InboxStatus.Retrying, stored.Status);
+        Assert.Equal("try again", stored.FailureDetails.ErrorMessage);
+        Assert.Equal("orders-deferred", stored.Deferred.PolicyName);
+        Assert.Equal("orders", stored.Deferred.Lane);
+        Assert.Equal(3, stored.Deferred.MaxAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(1), stored.Deferred.Delay);
+        Assert.Equal(TimeSpan.FromSeconds(5), stored.Deferred.MaxDelay);
+        Assert.Equal(InboxRetryBackoff.Exponential, stored.Deferred.Backoff);
+        Assert.Equal(0.25, stored.Deferred.JitterRatio);
+        Assert.Equal(TimeSpan.FromMinutes(2), stored.Deferred.InProgressTimeout);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_keeps_active_entry_in_progress_after_entry_lifetime_expires()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString, clock);
+        await EnsureDatabaseAsync(provider);
+        var request = InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-active-window",
+            new TestPayload("order-active-window"),
+            entryLifetime: TimeSpan.FromMinutes(1));
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var duplicate = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            return await secondScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.DuplicateInProgress, duplicate.State);
+        Assert.False(duplicate.Accepted);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_reopens_active_entry_after_in_progress_timeout()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 9, 1, 0, 0, TimeSpan.Zero));
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString, clock);
+        await EnsureDatabaseAsync(provider);
+        var request = InboxOpenRequest.For(
+            "http",
+            "POST /orders/deferred",
+            "order-active-timeout",
+            new TestPayload("order-active-timeout"),
+            deferred: new InboxDeferredPolicyOptions
+            {
+                InProgressTimeout = TimeSpan.FromMinutes(1)
+            });
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var reopened = await RunWithoutAmbientContextAsync(async () =>
+        {
+            using var secondScope = provider.CreateScope();
+            return await secondScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(request);
+        });
+
+        Assert.Equal(InboxOpenState.Opened, reopened.State);
+        Assert.True(reopened.Accepted);
+    }
+
     private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
         ServiceProvider provider,
         Action execute,
@@ -197,7 +315,10 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         return await task;
     }
 
-    private static ServiceProvider CreateProvider(string connectionString, TimeProvider timeProvider = null)
+    private static ServiceProvider CreateProvider(
+        string connectionString,
+        TimeProvider timeProvider = null,
+        Action<SquirrelBoxOptions> configure = null)
     {
         var services = new ServiceCollection();
         if (timeProvider is not null)
@@ -205,7 +326,7 @@ public sealed class EntityFrameworkInboxStoreE2ETests
 
         services.AddDbContext<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
         services
-            .AddSquirrelBox()
+            .AddSquirrelBox(configure)
             .UseEntityFrameworkInbox<TestInboxDbContext>();
 
         return services.BuildServiceProvider();

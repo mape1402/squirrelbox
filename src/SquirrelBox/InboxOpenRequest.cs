@@ -96,6 +96,11 @@ public sealed class InboxOpenRequest
     public InboxCompletedLockMode CompletedLock { get; init; } = InboxCompletedLockMode.Default;
 
     /// <summary>
+    /// Gets optional deferred execution settings selected by the opener.
+    /// </summary>
+    public InboxDeferredPolicyOptions Deferred { get; init; }
+
+    /// <summary>
     /// Gets an optional expiration timestamp.
     /// </summary>
     public DateTimeOffset? ExpiresOnUtc { get; init; }
@@ -121,7 +126,8 @@ public sealed class InboxOpenRequest
         DateTimeOffset? expiresOnUtc = null,
         string policyName = null,
         TimeSpan? entryLifetime = null,
-        InboxCompletedLockMode completedLock = InboxCompletedLockMode.Default)
+        InboxCompletedLockMode completedLock = InboxCompletedLockMode.Default,
+        InboxDeferredPolicyOptions deferred = null)
         => new()
         {
             Source = source,
@@ -137,6 +143,7 @@ public sealed class InboxOpenRequest
             ExpiresOnUtc = expiresOnUtc,
             PolicyName = policyName,
             EntryLifetime = entryLifetime,
-            CompletedLock = completedLock
+            CompletedLock = completedLock,
+            Deferred = deferred
         };
 }

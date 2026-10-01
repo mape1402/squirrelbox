@@ -57,6 +57,61 @@ public sealed class SquirrelBoxPayloadAttribute : Attribute, IAsyncActionFilter,
     /// <inheritdoc />
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
 
+    /// <summary>
+    /// Gets or sets whether this action should defer execution through the configured deferred adapter.
+    /// </summary>
+    public bool DeferExecution { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Mule lane or deferred adapter lane selected by this action.
+    /// </summary>
+    public string DeferredLane { get; set; }
+
+    /// <summary>
+    /// Gets or sets the maximum number of deferred execution attempts.
+    /// </summary>
+    public int RetryMaxAttempts { get; set; }
+
+    /// <summary>
+    /// Gets or sets the initial deferred retry delay in seconds.
+    /// </summary>
+    public int RetryDelaySeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the maximum deferred retry delay in seconds.
+    /// </summary>
+    public int RetryMaxDelaySeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the deferred retry backoff strategy.
+    /// </summary>
+    public InboxRetryBackoff RetryBackoff { get; set; } = InboxRetryBackoff.Fixed;
+
+    /// <summary>
+    /// Gets or sets the deferred retry jitter ratio.
+    /// </summary>
+    public double RetryJitterRatio { get; set; }
+
+    /// <summary>
+    /// Gets or sets how long an active deferred inbox entry can remain in progress before a new attempt may reopen it.
+    /// </summary>
+    public int InProgressTimeoutSeconds { get; set; }
+
+    /// <inheritdoc />
+    public InboxExecutionMode? ExecutionMode => DeferExecution ? InboxExecutionMode.Deferred : null;
+
+    /// <inheritdoc />
+    public InboxDeferredPolicyOptions Deferred => new()
+    {
+        Lane = DeferredLane,
+        MaxAttempts = RetryMaxAttempts > 0 ? RetryMaxAttempts : null,
+        Delay = RetryDelaySeconds > 0 ? TimeSpan.FromSeconds(RetryDelaySeconds) : null,
+        MaxDelay = RetryMaxDelaySeconds > 0 ? TimeSpan.FromSeconds(RetryMaxDelaySeconds) : null,
+        Backoff = RetryBackoff == InboxRetryBackoff.Fixed ? null : RetryBackoff,
+        JitterRatio = RetryJitterRatio > 0 ? RetryJitterRatio : null,
+        InProgressTimeout = InProgressTimeoutSeconds > 0 ? TimeSpan.FromSeconds(InProgressTimeoutSeconds) : null
+    };
+
     /// <inheritdoc />
     public async Task OnActionExecutionAsync(
         ActionExecutingContext context,

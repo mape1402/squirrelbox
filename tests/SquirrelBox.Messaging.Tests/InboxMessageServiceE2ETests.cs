@@ -147,6 +147,31 @@ public sealed class InboxMessageServiceE2ETests
     }
 
     [Fact]
+    public async Task OpenAsync_applies_deferred_settings_from_matching_message_policy()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "deferred-orders",
+            Version = "v1",
+            Subscription = "workers",
+            Operation = "created",
+            Payload = new OrderMessage("order-deferred")
+        });
+
+        Assert.Equal(InboxExecutionMode.Deferred, opened.OpenResult.Entry.ExecutionMode);
+        Assert.Equal("messaging-retry", opened.OpenResult.Entry.Deferred.Lane);
+        Assert.Equal(3, opened.OpenResult.Entry.Deferred.MaxAttempts);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), opened.OpenResult.Entry.Deferred.Delay);
+        Assert.Equal(InboxRetryBackoff.Linear, opened.OpenResult.Entry.Deferred.Backoff);
+        Assert.Equal(TimeSpan.FromMinutes(2), opened.OpenResult.Entry.Deferred.InProgressTimeout);
+    }
+
+    [Fact]
     public async Task OpenAsync_ignores_flat_identity_metadata_when_structured_section_is_missing()
     {
         var provider = CreateProvider();
@@ -239,5 +264,17 @@ public sealed class InboxMessageServiceE2ETests
 public sealed class InboxMessageServiceTestPolicyProfile : InboxMessagePolicyProfile
 {
     public override void Configure(InboxMessagePolicyProfileBuilder builder)
-        => builder.ForTopic("orders");
+    {
+        builder.ForTopic("orders");
+        builder.Match(topic: "deferred-orders", version: "v1", subscription: "workers", operation: "created")
+            .DeferExecution()
+            .WithDeferred(options =>
+            {
+                options.Lane = "messaging-retry";
+                options.MaxAttempts = 3;
+                options.Delay = TimeSpan.FromMilliseconds(250);
+                options.Backoff = InboxRetryBackoff.Linear;
+                options.InProgressTimeout = TimeSpan.FromMinutes(2);
+            });
+    }
 }

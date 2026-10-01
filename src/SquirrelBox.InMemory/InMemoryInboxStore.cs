@@ -28,9 +28,11 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.Opened, entry: stored));
 
         var isExpired = IsExpired(stored, entry.CreatedOnUtc);
+        var isActiveTimedOut = IsActiveTimedOut(stored, entry.CreatedOnUtc);
         var completedForever = IsCompletedForever(stored);
 
         if ((!isExpired || completedForever) &&
+            !isActiveTimedOut &&
             !string.IsNullOrWhiteSpace(stored.PayloadHash) &&
             !string.IsNullOrWhiteSpace(entry.PayloadHash) &&
             !string.Equals(stored.PayloadHash, entry.PayloadHash, StringComparison.Ordinal))
@@ -39,7 +41,7 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
             return ValueTask.FromResult(new InboxOpenResult(InboxOpenState.PayloadConflict, entry: stored));
         }
 
-        if (ShouldReopen(stored, isExpired))
+        if (ShouldReopen(stored, isExpired, isActiveTimedOut))
         {
             Reopen(stored, entry, preserveCorrelation: stored.Status is InboxStatus.Failed && !isExpired);
             RecordAttempt(stored, InboxOpenState.Opened, entry);
@@ -111,6 +113,23 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
     }
 
     /// <inheritdoc />
+    public ValueTask MarkRetryingAsync(
+        Ulid entryId,
+        InboxFailure failure,
+        DateTimeOffset retryingOnUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var entry = GetExisting(entryId);
+
+        entry.Status = InboxStatus.Retrying;
+        entry.Failure = failure?.Details;
+        entry.FailureDetails = failure;
+        entry.UpdatedOnUtc = retryingOnUtc;
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
         => ValueTask.FromResult(GetExisting(entryId));
 
@@ -151,14 +170,32 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
         };
 
     private static bool IsExpired(InboxEntry entry, DateTimeOffset now)
-        => entry.ExpiresOnUtc is { } expiresOnUtc && expiresOnUtc <= now;
+        => !IsActive(entry) &&
+           entry.ExpiresOnUtc is { } expiresOnUtc &&
+           expiresOnUtc <= now;
+
+    private static bool IsActive(InboxEntry entry)
+        => entry.Status is InboxStatus.Started or InboxStatus.Retrying;
+
+    private static bool IsActiveTimedOut(InboxEntry entry, DateTimeOffset now)
+    {
+        if (!IsActive(entry) ||
+            entry.Deferred?.InProgressTimeout is not { } timeout ||
+            timeout <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        return entry.UpdatedOnUtc.Add(timeout) <= now;
+    }
 
     private static bool IsCompletedForever(InboxEntry entry)
         => entry.Status is InboxStatus.Completed &&
            entry.CompletedLock is InboxCompletedLockMode.Forever;
 
-    private static bool ShouldReopen(InboxEntry entry, bool isExpired)
+    private static bool ShouldReopen(InboxEntry entry, bool isExpired, bool isActiveTimedOut)
         => entry.Status is InboxStatus.Failed ||
+           isActiveTimedOut ||
            (isExpired && !IsCompletedForever(entry));
 
     private static void Reopen(
@@ -184,6 +221,7 @@ public sealed class InMemoryInboxStore : IInboxStore, IInboxDiagnosticsStore
         stored.CompletedLock = incoming.CompletedLock is InboxCompletedLockMode.Default
             ? InboxCompletedLockMode.UntilExpiration
             : incoming.CompletedLock;
+        stored.Deferred = incoming.Deferred?.Clone() ?? new InboxDeferredExecutionOptions();
         stored.Status = InboxStatus.Started;
         stored.CreatedOnUtc = incoming.CreatedOnUtc;
         stored.UpdatedOnUtc = incoming.UpdatedOnUtc;

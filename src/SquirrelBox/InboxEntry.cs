@@ -106,6 +106,11 @@ public sealed class InboxEntry
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.UntilExpiration;
 
     /// <summary>
+    /// Gets or sets the deferred execution settings resolved for this entry.
+    /// </summary>
+    public InboxDeferredExecutionOptions Deferred { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets when the entry was created in UTC.
     /// </summary>
     public DateTimeOffset CreatedOnUtc { get; set; }

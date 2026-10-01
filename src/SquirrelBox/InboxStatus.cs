@@ -11,6 +11,11 @@ public enum InboxStatus
     Started,
 
     /// <summary>
+    /// The entry failed a non-terminal deferred attempt and is waiting for retry.
+    /// </summary>
+    Retrying,
+
+    /// <summary>
     /// The protected work completed successfully.
     /// </summary>
     Completed,

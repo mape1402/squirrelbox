@@ -122,6 +122,49 @@ public sealed class SquirrelBoxInboxEntryRecord
     public string CompletedLock { get; set; }
 
     /// <summary>
+    /// Gets or sets the resolved deferred policy name.
+    /// </summary>
+    [MaxLength(128)]
+    public string DeferredPolicyName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved durable execution lane.
+    /// </summary>
+    [MaxLength(256)]
+    public string DeferredLane { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved maximum durable execution attempts.
+    /// </summary>
+    public int? DeferredMaxAttempts { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved retry delay in milliseconds.
+    /// </summary>
+    public long? DeferredDelayMilliseconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved maximum retry delay in milliseconds.
+    /// </summary>
+    public long? DeferredMaxDelayMilliseconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved retry backoff strategy.
+    /// </summary>
+    [MaxLength(64)]
+    public string DeferredBackoff { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved retry jitter ratio.
+    /// </summary>
+    public double? DeferredJitterRatio { get; set; }
+
+    /// <summary>
+    /// Gets or sets the active work timeout in milliseconds.
+    /// </summary>
+    public long? DeferredInProgressTimeoutMilliseconds { get; set; }
+
+    /// <summary>
     /// Gets or sets the UTC creation timestamp.
     /// </summary>
     public DateTimeOffset CreatedOnUtc { get; set; }
