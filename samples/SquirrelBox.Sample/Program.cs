@@ -44,6 +44,22 @@ builder.Services
             policy.Deferred.Backoff = InboxRetryBackoff.Exponential;
             policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
         });
+        options.AddInboxPolicy("orders-deferred-slow", policy =>
+        {
+            policy.ExecutionMode = InboxExecutionMode.Deferred;
+            policy.Deferred.Lane = "orders-deferred-slow";
+            policy.Deferred.MaxAttempts = 1;
+            policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
+        });
+        options.AddInboxPolicy("orders-deferred-retry-demo", policy =>
+        {
+            policy.ExecutionMode = InboxExecutionMode.Deferred;
+            policy.Deferred.Lane = "orders-deferred-retry-demo";
+            policy.Deferred.MaxAttempts = 2;
+            policy.Deferred.Delay = TimeSpan.FromSeconds(2);
+            policy.Deferred.Backoff = InboxRetryBackoff.Fixed;
+            policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
+        });
         options.AddInboxPolicy("pigeon-deferred", policy =>
         {
             policy.ExecutionMode = InboxExecutionMode.Deferred;
@@ -58,6 +74,9 @@ builder.Services
     .UseInMemory();
 
 builder.Services.AddScoped<CreateOrderOperation>();
+builder.Services.AddScoped<CreateSlowOrderOperation>();
+builder.Services.AddScoped<CreateFlakyOrderOperation>();
+builder.Services.AddScoped<CreateFailingOrderOperation>();
 
 builder.Services.AddSquirrelBoxAspNetCore(options =>
 {
@@ -136,6 +155,9 @@ app.MapGet("/", () => Results.Ok(new
         "POST /orders/window uses a short idempotency window and accepts the same payload again after the window expires.",
         "POST /orders/forever keeps completed duplicates locked forever for payment-style entrypoints.",
         "POST /orders/deferred schedules the declared operation through Mule with retry policy.",
+        "POST /orders/deferred-slow keeps duplicates blocked while deferred work is still active.",
+        "POST /orders/deferred-flaky fails once, enters Retrying, and completes on Mule retry.",
+        "POST /orders/deferred-failing fails through all attempts and ends as Failed.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
         "POST /outbox/direct enqueues transport-agnostic sample outbox work.",
@@ -221,6 +243,57 @@ app.MapPost("/orders/deferred", async (
     return ToHttpResult(result);
 })
 .WithSquirrelBoxPayload(options => options.PolicyName = "orders-deferred");
+
+app.MapPost("/orders/deferred-slow", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateSlowOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxPayload(options =>
+{
+    options.PolicyName = "orders-deferred-slow";
+    options.ExecutionMode = InboxExecutionMode.Deferred;
+});
+
+app.MapPost("/orders/deferred-flaky", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateFlakyOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxPayload(options =>
+{
+    options.PolicyName = "orders-deferred-retry-demo";
+    options.ExecutionMode = InboxExecutionMode.Deferred;
+});
+
+app.MapPost("/orders/deferred-failing", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateFailingOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxPayload(options =>
+{
+    options.PolicyName = "orders-deferred-retry-demo";
+    options.ExecutionMode = InboxExecutionMode.Deferred;
+});
 
 app.MapPost("/pigeon/inline", async (
     OrderMessage message,
@@ -401,6 +474,55 @@ public static class SamplePigeonRoutes
 }
 
 /// <summary>
+/// Declared operation that stays active long enough to demonstrate in-progress duplicate blocking.
+/// </summary>
+public sealed class CreateSlowOrderOperation : SquirrelBoxOperation<CreateOrderRequest, OrderSnapshot>
+{
+    /// <inheritdoc />
+    protected override async ValueTask<OrderSnapshot> ExecuteAsync(
+        CreateOrderRequest request,
+        SquirrelBoxOperationContext context,
+        CancellationToken cancellationToken)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        return context.Services.GetRequiredService<SampleOrderStore>()
+            .MarkCreated(request, "http-operation-slow");
+    }
+}
+
+/// <summary>
+/// Declared operation that fails once and then succeeds to demonstrate deferred retry completion.
+/// </summary>
+public sealed class CreateFlakyOrderOperation : SquirrelBoxOperation<CreateOrderRequest, OrderSnapshot>
+{
+    /// <inheritdoc />
+    protected override ValueTask<OrderSnapshot> ExecuteAsync(
+        CreateOrderRequest request,
+        SquirrelBoxOperationContext context,
+        CancellationToken cancellationToken)
+    {
+        var orders = context.Services.GetRequiredService<SampleOrderStore>();
+        if (orders.ShouldFailOnce(request.ExternalOrderId))
+            throw new InvalidOperationException("Sample transient failure.");
+
+        return ValueTask.FromResult(orders.MarkCreated(request, "http-operation-retried"));
+    }
+}
+
+/// <summary>
+/// Declared operation that always fails to demonstrate terminal deferred failure.
+/// </summary>
+public sealed class CreateFailingOrderOperation : SquirrelBoxOperation<CreateOrderRequest, OrderSnapshot>
+{
+    /// <inheritdoc />
+    protected override ValueTask<OrderSnapshot> ExecuteAsync(
+        CreateOrderRequest request,
+        SquirrelBoxOperationContext context,
+        CancellationToken cancellationToken)
+        => throw new InvalidOperationException("Sample terminal failure.");
+}
+
+/// <summary>
 /// Enables SquirrelBox inbox only for the sample Pigeon topics.
 /// </summary>
 public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
@@ -421,15 +543,25 @@ public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
 public sealed class SampleOrderStore
 {
     private readonly ConcurrentDictionary<string, OrderSnapshot> _orders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _transientFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentQueue<OrderAuditSnapshot> _audits = new();
 
     /// <summary>
     /// Marks an order as created by an HTTP operation.
     /// </summary>
     /// <param name="request">The incoming order request.</param>
+    /// <param name="status">The status to store.</param>
     /// <returns>The stored order snapshot.</returns>
-    public OrderSnapshot MarkCreated(CreateOrderRequest request)
-        => Upsert(request.ExternalOrderId, request.CustomerId, request.Amount, "http-operation");
+    public OrderSnapshot MarkCreated(CreateOrderRequest request, string status = "http-operation")
+        => Upsert(request.ExternalOrderId, request.CustomerId, request.Amount, status);
+
+    /// <summary>
+    /// Returns <see langword="true"/> only for the first transient failure check of an order.
+    /// </summary>
+    /// <param name="orderId">The order id.</param>
+    /// <returns><see langword="true"/> when the caller should fail this attempt.</returns>
+    public bool ShouldFailOnce(string orderId)
+        => _transientFailures.AddOrUpdate(orderId, 1, (_, current) => current + 1) == 1;
 
     /// <summary>
     /// Marks an order from a Pigeon message.
