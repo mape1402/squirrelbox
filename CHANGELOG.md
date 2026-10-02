@@ -4,6 +4,17 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v3.2.1] - 2026-10-02
+
+### Fixed
+
+- Fixed deferred inbox terminal retry handling so the last Mule attempt marks the inbox entry as `Failed` instead of leaving it stuck in `Retrying`.
+- Added Mule worker coverage for terminal deferred inbox failures and sample endpoints that validate active duplicates, transient retries, terminal failure reopen, and Pigeon deferred consumption.
+
+### Changed
+
+- Updated the sample verification flow for HTTP idempotency windows, completed-forever replay, computed response keys, and unmarked endpoints that should ignore idempotency headers.
+
 ## [v3.2.0] - 2026-10-01
 
 ### Added

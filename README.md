@@ -25,11 +25,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="3.2.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="3.2.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.2.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.2.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="3.2.0" />
+<PackageReference Include="SquirrelBox" Version="3.2.1" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="3.2.1" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.2.1" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.2.1" />
+<PackageReference Include="SquirrelBox.Mule" Version="3.2.1" />
 ```
 
 ## Getting Started
@@ -232,6 +232,12 @@ While Mule still has attempts available, SquirrelBox marks the inbox entry as `R
 Only the terminal Mule failure marks the entry as `Failed`. Normal `EntryLifetime` controls
 the duplicate window for terminal entries; active entries stay in progress until they
 complete/fail or pass the configured `InProgressTimeout`.
+
+The sample project includes deferred HTTP endpoints for active duplicate blocking,
+transient retry completion, terminal retry failure/reopen, and Pigeon deferred consumption.
+It also demonstrates HTTP payload windows: expired completed entries can execute again,
+while `InboxCompletedLockMode.Forever` replays the original completed response instead of
+running the operation again.
 
 ## Outbox
 
