@@ -34,6 +34,7 @@ public static class SquirrelBoxServiceCollectionExtensions
         services.TryAddSingleton<ISquirrelBoxOperationRegistry, DefaultSquirrelBoxOperationRegistry>();
         services.TryAddSingleton<IOutboxContextAccessor, AsyncLocalOutboxContextAccessor>();
         services.TryAddSingleton<IOutboxEnvelopeSerializer, JsonOutboxEnvelopeSerializer>();
+        services.TryAddSingleton<IOutboxPayloadTypeNameResolver, DefaultOutboxPayloadTypeNameResolver>();
         services.TryAddSingleton<IOutboxProfileRegistry, DefaultOutboxProfileRegistry>();
         services.TryAddSingleton<ISquirrelBoxEventSink, InMemorySquirrelBoxEventSink>();
         services.TryAddSingleton<ISquirrelBoxEventPublisher>(provider => provider.GetRequiredService<ISquirrelBoxEventSink>());

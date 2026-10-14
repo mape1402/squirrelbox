@@ -42,7 +42,7 @@ public sealed class SquirrelBoxPigeonOutboxTests
         Assert.Equal(envelope.Id.ToString(), result.Metadata["squirrelbox-outbox-id"]);
         Assert.Equal("pigeon.publish", envelope.Operation);
         Assert.Equal("orders", envelope.Destination);
-        Assert.Equal(typeof(PigeonPublishEnvelope).AssemblyQualifiedName, envelope.PayloadType);
+        Assert.Equal(typeof(PigeonPublishEnvelope).FullName, envelope.PayloadType);
         Assert.Equal("1.2.0", envelope.Metadata["squirrelbox-pigeon-version"]);
         Assert.Equal("create-order", envelope.Metadata["pigeon-operation"]);
         Assert.Equal("north", envelope.Headers["x-tenant"]);
@@ -341,7 +341,7 @@ public sealed class SquirrelBoxPigeonOutboxTests
             Transport = "pigeon",
             Operation = "pigeon.publish",
             Destination = "orders",
-            PayloadType = payloadType.AssemblyQualifiedName,
+            PayloadType = new DefaultOutboxPayloadTypeNameResolver().GetName(payloadType),
             Payload = serializer.Serialize(payload, payloadType),
             ContentType = serializer.ContentType,
             Status = OutboxStatus.Pending,
