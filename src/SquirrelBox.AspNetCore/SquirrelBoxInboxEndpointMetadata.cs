@@ -27,16 +27,14 @@ internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetada
     public InboxDeferredPolicyOptions Deferred { get; }
 
     private static InboxDeferredPolicyOptions CloneDeferred(InboxDeferredPolicyOptions deferred)
-        => deferred is null
-            ? null
-            : new InboxDeferredPolicyOptions
-            {
-                Lane = deferred.Lane,
-                MaxAttempts = deferred.MaxAttempts,
-                Delay = deferred.Delay,
-                MaxDelay = deferred.MaxDelay,
-                Backoff = deferred.Backoff,
-                JitterRatio = deferred.JitterRatio,
-                InProgressTimeout = deferred.InProgressTimeout
-            };
+        => new()
+        {
+            Lane = deferred.Lane,
+            MaxAttempts = deferred.MaxAttempts,
+            Delay = deferred.Delay,
+            MaxDelay = deferred.MaxDelay,
+            Backoff = deferred.Backoff,
+            JitterRatio = deferred.JitterRatio,
+            InProgressTimeout = deferred.InProgressTimeout
+        };
 }

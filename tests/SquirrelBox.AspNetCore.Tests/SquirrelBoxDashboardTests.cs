@@ -157,7 +157,8 @@ public sealed class SquirrelBoxDashboardTests
     [Fact]
     public async Task Dashboard_event_stream_pushes_events_for_authenticated_user()
     {
-        using var server = CreateServer();
+        var sink = new SignalingEventSink();
+        using var server = CreateServer(eventSink: sink);
         using var client = server.CreateClient();
         await SignInAsync(client);
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -166,10 +167,9 @@ public sealed class SquirrelBoxDashboardTests
             "/squirrelbox/events/stream",
             HttpCompletionOption.ResponseHeadersRead,
             cancellation.Token);
-        await Task.Delay(100, cancellation.Token);
+        await sink.Subscribed.WaitAsync(cancellation.Token);
 
-        await server.Services.GetRequiredService<ISquirrelBoxEventPublisher>()
-            .PublishAsync(new SquirrelBoxEvent
+        await sink.PublishAsync(new SquirrelBoxEvent
             {
                 Name = "dashboard-test",
                 Category = "Tests",
@@ -327,12 +327,16 @@ public sealed class SquirrelBoxDashboardTests
         Assert.Same(user, accessor.Current);
     }
 
-    private static TestServer CreateServer(Action<SquirrelBoxDashboardOptions> configure = null)
+    private static TestServer CreateServer(
+        Action<SquirrelBoxDashboardOptions> configure = null,
+        ISquirrelBoxEventSink eventSink = null)
     {
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
             {
                 services.AddRouting();
+                if (eventSink is not null)
+                    services.AddSingleton<ISquirrelBoxEventSink>(eventSink);
                 services.AddSquirrelBox().UseInMemory();
                 services.AddSquirrelBoxDashboard(options =>
                 {
@@ -449,6 +453,27 @@ public sealed class SquirrelBoxDashboardTests
     }
 
     private sealed record OrderRequest(string Id);
+
+    private sealed class SignalingEventSink : ISquirrelBoxEventSink
+    {
+        private readonly InMemorySquirrelBoxEventSink _inner = new();
+        private readonly TaskCompletionSource _subscribed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Subscribed => _subscribed.Task;
+
+        public ValueTask PublishAsync(SquirrelBoxEvent @event, CancellationToken cancellationToken = default)
+            => _inner.PublishAsync(@event, cancellationToken);
+
+        public IDisposable Subscribe(Func<SquirrelBoxEvent, CancellationToken, ValueTask> handler)
+        {
+            var subscription = _inner.Subscribe(handler);
+            _subscribed.TrySetResult();
+            return subscription;
+        }
+
+        public IReadOnlyList<SquirrelBoxEvent> GetRecent(int limit = 100)
+            => _inner.GetRecent(limit);
+    }
 
     private sealed class DashboardState
     {
