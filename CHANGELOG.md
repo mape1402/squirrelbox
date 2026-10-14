@@ -4,6 +4,18 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v3.2.2] - 2026-10-14
+
+### Fixed
+
+- Fixed Pigeon outbox durable replay so the structured `SquirrelBoxMetadata` section is restored inside the serialized `WrappedPayload<T>.Metadata` body before publishing.
+- Added diagnostics for inbox/outbox decisions, rejected messaging opens, Pigeon inbox rejection reasons, outbox publish failures, and wrapped payload metadata repairs.
+
+### Changed
+
+- Updated the README with a branded hero image and the complete Build, NuGet, Downloads, Coverage, and License badge set.
+- Updated CI test execution to collect Cobertura coverage artifacts.
+
 ## [v3.2.1] - 2026-10-02
 
 ### Fixed

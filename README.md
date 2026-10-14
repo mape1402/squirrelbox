@@ -3,7 +3,10 @@
 [![Build](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![NuGet](https://img.shields.io/nuget/v/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
 [![Downloads](https://img.shields.io/nuget/dt/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
+[![Coverage](https://img.shields.io/badge/Coverage-enabled-0E7C86.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![License](https://img.shields.io/github/license/mape1402/squirrelbox.svg)](LICENSE)
+
+![SquirrelBox README hero](https://raw.githubusercontent.com/mape1402/squirrelbox/main/assets/readme-hero.png)
 
 SquirrelBox is the Elysium inbox/outbox toolkit for .NET services.
 
