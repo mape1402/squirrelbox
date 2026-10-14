@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace SquirrelBox.Messaging;
@@ -11,6 +13,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
     private readonly IInboxPolicyResolver _policyResolver;
     private readonly IInboxMessagePolicyRegistry _policyRegistry;
     private readonly ISquirrelBoxMessageMetadataEnricher _metadataEnricher;
+    private readonly ILogger<DefaultInboxMessageService> _logger;
     private readonly SquirrelBoxMessagingOptions _options;
 
     /// <summary>
@@ -20,19 +23,22 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
     /// <param name="policyResolver">The core policy resolver.</param>
     /// <param name="policyRegistry">The messaging inbox policy registry.</param>
     /// <param name="metadataEnricher">The SquirrelBox message metadata enricher.</param>
+    /// <param name="logger">The logger used to emit messaging inbox diagnostics.</param>
     /// <param name="options">The messaging options.</param>
     public DefaultInboxMessageService(
         IInboxService inbox,
         IInboxPolicyResolver policyResolver,
         IInboxMessagePolicyRegistry policyRegistry,
         ISquirrelBoxMessageMetadataEnricher metadataEnricher,
-        IOptions<SquirrelBoxMessagingOptions> options)
+        IOptions<SquirrelBoxMessagingOptions> options,
+        ILogger<DefaultInboxMessageService> logger = null)
     {
         _inbox = inbox ?? throw new ArgumentNullException(nameof(inbox));
         _policyResolver = policyResolver ?? throw new ArgumentNullException(nameof(policyResolver));
         _policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
         _metadataEnricher = metadataEnricher ?? throw new ArgumentNullException(nameof(metadataEnricher));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger ?? NullLogger<DefaultInboxMessageService>.Instance;
     }
 
     /// <inheritdoc />
@@ -44,12 +50,36 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
         ArgumentException.ThrowIfNullOrWhiteSpace(context.Transport);
 
         if (!_policyRegistry.TryResolve(context, out var policy))
+        {
+            _logger.LogDebug(
+                "SquirrelBox messaging inbox is disabled for message. Transport={Transport} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId}",
+                context.Transport,
+                context.Topic,
+                context.Version,
+                context.Subscription,
+                context.Operation,
+                context.MessageId);
             return InboxMessageOpenResult.Disabled;
+        }
 
         var metadata = context.Metadata is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(context.Metadata, StringComparer.OrdinalIgnoreCase);
         SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata);
+        if (squirrelBoxMetadata?.HasValues != true)
+        {
+            _logger.LogWarning(
+                SquirrelBoxLogEvents.MessagingMetadataMissing,
+                "SquirrelBox messaging metadata section is missing. Transport={Transport} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId} CorrelationId={CorrelationId}",
+                context.Transport,
+                context.Topic,
+                context.Version,
+                context.Subscription,
+                context.Operation,
+                context.MessageId,
+                context.CorrelationId);
+        }
+
         var idempotencyKey = ResolveIdempotencyKey(context, squirrelBoxMetadata);
         var correlationId = ResolveCorrelationId(context, squirrelBoxMetadata);
         var traceId = ResolveTraceId(context, squirrelBoxMetadata);
@@ -87,7 +117,45 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             request.Metadata["version"] = context.Version;
 
         var open = await _inbox.OpenOrContinueAsync(request, cancellationToken);
-        return new InboxMessageOpenResult(open, _policyResolver.Resolve(open), _metadataEnricher.Create(open.Identity));
+        var decision = _policyResolver.Resolve(open);
+        if (decision.ShouldExecute)
+        {
+            _logger.LogInformation(
+                SquirrelBoxLogEvents.InboxAccepted,
+                "SquirrelBox messaging inbox accepted message. State={State} Action={Action} Transport={Transport} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId}",
+                decision.State,
+                decision.Action,
+                context.Transport,
+                context.Topic,
+                context.Version,
+                context.Subscription,
+                request.Operation,
+                context.MessageId,
+                open.EffectiveIdempotencyKey,
+                open.EffectiveCorrelationId,
+                open.EffectiveTraceId);
+        }
+        else
+        {
+            _logger.LogWarning(
+                decision.State == InboxOpenState.MissingIdempotencyKey
+                    ? SquirrelBoxLogEvents.InboxMissingIdempotencyKey
+                    : SquirrelBoxLogEvents.InboxRejected,
+                "SquirrelBox messaging inbox rejected message. State={State} Action={Action} Transport={Transport} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId}",
+                decision.State,
+                decision.Action,
+                context.Transport,
+                context.Topic,
+                context.Version,
+                context.Subscription,
+                request.Operation,
+                context.MessageId,
+                open.EffectiveIdempotencyKey,
+                open.EffectiveCorrelationId,
+                open.EffectiveTraceId);
+        }
+
+        return new InboxMessageOpenResult(open, decision, _metadataEnricher.Create(open.Identity));
     }
 
     /// <inheritdoc />
