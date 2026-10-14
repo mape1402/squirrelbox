@@ -18,6 +18,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ### Changed
 
 - **Breaking:** renamed the ASP.NET Core payload-aware APIs from `[SquirrelBoxPayload]` and `.WithSquirrelBoxPayload()` to `[SquirrelBoxInbox]` and `.WithSquirrelBoxInbox()`.
+- **Breaking:** upgraded the Mule integration to `Mule.DurableActions` 2.0.0; `IInboxMuleScheduler.EnqueueCurrentAsync` now returns `Mule.Ulid`, matching Mule's durable action identity API.
 - Changed default outbox payload type persistence from long assembly-qualified names to compact CLR full names while keeping legacy assembly-qualified resolution for replay.
 - Changed EF Core configuration guidance and APIs so applications configure SquirrelBox only through dependency registration; application `DbContext` types still do not need SquirrelBox `DbSet` properties or `OnModelCreating` calls.
 - Tightened EF Core default column sizing for operational fields such as payload type, destination, and failure details, while keeping JSON payload/metadata fields unbounded by default.

@@ -688,6 +688,10 @@ services.AddMule(mule => mule
     .AddActionsFromAssemblyContaining<SquirrelBoxPigeonMuleAction>());
 ```
 
+SquirrelBox 4 uses Mule 2.0. Durable action ids returned by
+`IInboxMuleScheduler.EnqueueCurrentAsync` are `Mule.Ulid`; inbox and outbox entity ids
+remain `System.Ulid`.
+
 SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, retry policy metadata, and the structured `SquirrelBoxMetadata` section. When an inbox policy configures deferred retries, `AddSquirrelBoxMule()` creates or updates the Mule lane retry policy automatically. User Mule configuration can still override lane behavior by configuring the same lane after SquirrelBox registration.
 
 ## Observability

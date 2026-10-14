@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Mule;
 using NSubstitute;
+using Ulid = System.Ulid;
 
 namespace SquirrelBox.Mule.Tests;
 
