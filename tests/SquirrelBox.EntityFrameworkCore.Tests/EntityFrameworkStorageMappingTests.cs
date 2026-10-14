@@ -64,6 +64,51 @@ public sealed class EntityFrameworkStorageMappingTests
     }
 
     [Fact]
+    public void Full_mapping_options_are_applied_from_dependency_registration()
+    {
+        using var provider = CreateProvider(ef =>
+        {
+            ef.UseSchema("squirrel");
+            ef.StoreUlidsAsText("char(26)");
+            ef.ConfigureUlidProperties(property => property.HasColumnName(property.Metadata.Name));
+            ef.ConfigureInboxEntries(entity => entity.ToTable("InboxEntries", "squirrel"));
+            ef.ConfigureInboxAttempts(entity => entity.ToTable("InboxAttempts", "squirrel"));
+            ef.ConfigureOutboxEnvelopes(entity => entity.ToTable("OutboxEnvelopes", "squirrel"));
+            ef.ConfigureOutboxAttempts(entity => entity.ToTable("OutboxAttempts", "squirrel"));
+            ef.UseSqlServerDefaults(sql => sql.StoreUlidsAsText());
+        });
+
+        using var scope = provider.CreateScope();
+        var model = scope.ServiceProvider.GetRequiredService<MappingDbContext>().Model;
+
+        Assert.Equal("squirrel", model.FindEntityType(typeof(SquirrelBoxInboxEntryRecord))?.GetSchema());
+        Assert.Equal("InboxEntries", model.FindEntityType(typeof(SquirrelBoxInboxEntryRecord))?.GetTableName());
+        Assert.Equal("InboxAttempts", model.FindEntityType(typeof(SquirrelBoxInboxAttemptRecord))?.GetTableName());
+        Assert.Equal("OutboxEnvelopes", model.FindEntityType(typeof(SquirrelBoxOutboxEnvelopeRecord))?.GetTableName());
+        Assert.Equal("OutboxAttempts", model.FindEntityType(typeof(SquirrelBoxOutboxAttemptRecord))?.GetTableName());
+        Assert.Equal("char(26)", FindProperty<SquirrelBoxOutboxAttemptRecord>(
+            model,
+            nameof(SquirrelBoxOutboxAttemptRecord.Id)).GetColumnType());
+    }
+
+    [Fact]
+    public void SqlServer_storage_builder_can_switch_back_to_binary16_after_text()
+    {
+        using var provider = CreateProvider(ef => ef.UseSqlServerDefaults(sql =>
+        {
+            sql.StoreUlidsAsText();
+            sql.StoreUlidsAsBinary16();
+        }));
+        using var scope = provider.CreateScope();
+        var model = scope.ServiceProvider.GetRequiredService<MappingDbContext>().Model;
+
+        var id = FindProperty<SquirrelBoxOutboxEnvelopeRecord>(model, nameof(SquirrelBoxOutboxEnvelopeRecord.Id));
+
+        Assert.Equal(typeof(byte[]), id.GetTypeMapping().Converter.ProviderClrType);
+        Assert.Equal("binary(16)", id.GetColumnType());
+    }
+
+    [Fact]
     public void SquirrelBox_model_is_attached_without_dbsets_or_on_model_creating()
     {
         using var provider = CreateProvider();
