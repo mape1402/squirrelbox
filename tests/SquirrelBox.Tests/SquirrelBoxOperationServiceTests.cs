@@ -163,6 +163,64 @@ public sealed class SquirrelBoxOperationServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_throws_when_no_operation_is_discovered_for_request_and_result()
+    {
+        using var provider = CreateProvider(options => options.ScanAssemblyContaining<CreateOrderOperation>());
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ExecuteAsync<UnknownOrderRequest, CreateOrderResult>(new UnknownOrderRequest("missing")).AsTask());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_throws_when_multiple_operations_match_request_and_result()
+    {
+        using var provider = CreateProvider(options => options.ScanAssemblyContaining<DuplicateOrderOperationA>());
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ExecuteAsync<DuplicateOrderRequest, DuplicateOrderResult>(new DuplicateOrderRequest("duplicate")).AsTask());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_returns_skipped_when_policy_does_not_execute_opened_operation()
+    {
+        using var provider = CreateProvider(options => options.Policies.Opened = InboxPolicyAction.Skip);
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider
+            .GetRequiredService<ISquirrelBoxOperationService>()
+            .ExecuteAsync<CreateOrderOperation, CreateOrderRequest, CreateOrderResult>(new CreateOrderRequest("order-skip"));
+
+        Assert.Equal(SquirrelBoxOperationExecutionState.Skipped, result.State);
+        Assert.Null(result.Result);
+        Assert.Empty(provider.GetRequiredService<OrderProbe>().Requests);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_replays_empty_completion_as_default_result()
+    {
+        using var provider = CreateProvider();
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider
+                .GetRequiredService<ISquirrelBoxOperationService>()
+                .ExecuteAsync<NullOrderOperation, NullOrderRequest, CreateOrderResult>(new NullOrderRequest("order-null-replay"));
+        }
+
+        using var secondScope = provider.CreateScope();
+        var second = await secondScope.ServiceProvider
+            .GetRequiredService<ISquirrelBoxOperationService>()
+            .ExecuteAsync<NullOrderOperation, NullOrderRequest, CreateOrderResult>(new NullOrderRequest("order-null-replay"));
+
+        Assert.Equal(SquirrelBoxOperationExecutionState.Replayed, second.State);
+        Assert.Null(second.Result);
+    }
+
+    [Fact]
     public async Task ContinueAsync_executes_deferred_operation_envelope_in_current_context()
     {
         using var provider = CreateProvider();
@@ -230,11 +288,17 @@ public sealed class SquirrelBoxOperationServiceTests
 
     private sealed record CreateOrderRequest(string Id);
 
+    private sealed record UnknownOrderRequest(string Id);
+
     private sealed record FailingOrderRequest(string Id);
 
     private sealed record NullOrderRequest(string Id);
 
     private sealed record CreateOrderResult(string Value);
+
+    private sealed record DuplicateOrderRequest(string Id);
+
+    private sealed record DuplicateOrderResult(string Value);
 
     private sealed class CreateOrderOperation : SquirrelBoxOperation<CreateOrderRequest, CreateOrderResult>
     {
@@ -264,6 +328,24 @@ public sealed class SquirrelBoxOperationServiceTests
             SquirrelBoxOperationContext context,
             CancellationToken cancellationToken)
             => ValueTask.FromResult<CreateOrderResult>(null);
+    }
+
+    private sealed class DuplicateOrderOperationA : SquirrelBoxOperation<DuplicateOrderRequest, DuplicateOrderResult>
+    {
+        protected override ValueTask<DuplicateOrderResult> ExecuteAsync(
+            DuplicateOrderRequest request,
+            SquirrelBoxOperationContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new DuplicateOrderResult($"a:{request.Id}"));
+    }
+
+    private sealed class DuplicateOrderOperationB : SquirrelBoxOperation<DuplicateOrderRequest, DuplicateOrderResult>
+    {
+        protected override ValueTask<DuplicateOrderResult> ExecuteAsync(
+            DuplicateOrderRequest request,
+            SquirrelBoxOperationContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new DuplicateOrderResult($"b:{request.Id}"));
     }
 
     private sealed class OrderProbe

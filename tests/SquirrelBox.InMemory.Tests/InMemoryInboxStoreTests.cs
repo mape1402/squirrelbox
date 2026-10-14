@@ -57,6 +57,36 @@ public sealed class InMemoryInboxStoreTests
     }
 
     [Fact]
+    public async Task TryOpenAsync_attaches_payload_hash_to_existing_active_entry()
+    {
+        var store = new InMemoryInboxStore();
+        var first = Create("POST /orders");
+        first.PayloadHash = null;
+        await store.TryOpenAsync(first);
+        var duplicate = Create("POST /orders");
+        duplicate.PayloadHash = "attached";
+
+        var result = await store.TryOpenAsync(duplicate);
+
+        Assert.Equal(InboxOpenState.DuplicateInProgress, result.State);
+        Assert.Equal("attached", result.Entry.PayloadHash);
+    }
+
+    [Fact]
+    public async Task TryOpenAsync_returns_expired_duplicate_state_for_non_window_expired_entries()
+    {
+        var store = new InMemoryInboxStore();
+        var expired = Create("POST /orders");
+        expired.Status = InboxStatus.Expired;
+        expired.ExpiresOnUtc = null;
+        await store.TryOpenAsync(expired);
+
+        var result = await store.TryOpenAsync(Create("POST /orders"));
+
+        Assert.Equal(InboxOpenState.Expired, result.State);
+    }
+
+    [Fact]
     public async Task TryOpenAsync_reopens_failed_entry_and_preserves_correlation_before_expiration()
     {
         var store = new InMemoryInboxStore();

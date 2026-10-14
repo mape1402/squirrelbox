@@ -81,16 +81,107 @@ public sealed class OutboxServiceTests
         Assert.Contains("planned", stored.Failure.Details);
     }
 
-    private static ServiceProvider CreateProvider(bool fail = false)
+    [Fact]
+    public async Task PublishAsync_returns_success_without_republishing_terminal_envelope()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+        var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "test",
+            Operation = "orders.created",
+            Destination = "orders",
+            Payload = new TestMessage("order-terminal")
+        });
+
+        await outbox.PublishAsync(envelope.Id);
+        var second = await outbox.PublishAsync(envelope.Id);
+
+        Assert.True(second.Succeeded);
+        Assert.Single(provider.GetRequiredService<TestOutboxPublisher>().Published);
+    }
+
+    [Fact]
+    public async Task QueryAsync_accepts_null_query()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+        await outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "test",
+            Operation = "orders.created",
+            Destination = "orders",
+            Payload = new TestMessage("order-query")
+        });
+
+        var envelopes = await outbox.QueryAsync(null);
+
+        Assert.Single(envelopes);
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_requires_deferred_scheduler_when_configured()
+    {
+        using var provider = CreateProvider(configure: options => options.Outbox.RequireDeferredScheduler = true);
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "test",
+            Operation = "orders.created",
+            Destination = "orders",
+            Payload = new TestMessage("order-requires-scheduler")
+        }).AsTask());
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_rejects_custom_profile_that_returns_empty_payload()
+    {
+        using var provider = CreateProvider(configure: options => options.ScanAssemblyContaining<InvalidOutboxProfile>());
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "invalid",
+            Operation = "orders.invalid",
+            Destination = "orders",
+            Payload = new TestMessage("order-invalid")
+        }).AsTask());
+    }
+
+    private static ServiceProvider CreateProvider(bool fail = false, Action<SquirrelBoxOptions> configure = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(new TestOutboxPublisher(fail));
         services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
-        services.AddSquirrelBox().UseInMemory();
+        services.AddSquirrelBox(configure).UseInMemory();
         return services.BuildServiceProvider();
     }
 
     private sealed record TestMessage(string Id);
+
+    private sealed class InvalidOutboxProfile : IOutboxProfile
+    {
+        public bool CanHandle(OutboxEnqueueRequest request)
+            => string.Equals(request.Transport, "invalid", StringComparison.OrdinalIgnoreCase);
+
+        public OutboxEnvelope CreateEnvelope(OutboxEnqueueRequest request, OutboxProfileContext context)
+            => new()
+            {
+                Id = Ulid.NewUlid(),
+                Transport = request.Transport,
+                Operation = request.Operation,
+                Destination = request.Destination,
+                PayloadType = typeof(TestMessage).FullName,
+                Status = OutboxStatus.Pending,
+                CreatedOnUtc = context.CreatedOnUtc,
+                UpdatedOnUtc = context.CreatedOnUtc
+            };
+    }
 
     private sealed class TestOutboxPublisher : IOutboxTransportPublisher
     {

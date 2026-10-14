@@ -72,6 +72,22 @@ public sealed class InboxServiceTests
     }
 
     [Fact]
+    public async Task ContinueAsync_reuses_matching_current_context()
+    {
+        var inbox = CreateInbox();
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-current",
+            new TestPayload("order-current")));
+
+        var continued = await inbox.ContinueAsync(opened.Entry.Id);
+
+        Assert.Same(opened.Context, continued);
+        Assert.Same(continued, inbox.Current);
+    }
+
+    [Fact]
     public async Task CompleteCurrentAsync_marks_completed_and_clears_context()
     {
         var inbox = CreateInbox();
@@ -551,6 +567,28 @@ public sealed class InboxServiceTests
         var begin = await inbox.OpenOrContinueAsync(request);
 
         Assert.Equal("north", begin.Entry.Metadata["tenant"]);
+    }
+
+    [Fact]
+    public async Task OpenOrContinueAsync_derives_deferred_lane_from_policy_name_when_retry_is_configured()
+    {
+        var provider = CreateProvider(options =>
+        {
+            options.AddInboxPolicy("orders-retry", policy =>
+            {
+                policy.Deferred.MaxAttempts = 3;
+            });
+        });
+        var inbox = provider.GetRequiredService<IInboxService>();
+
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "order-policy-lane",
+            new TestPayload("order-policy-lane"),
+            policyName: "orders-retry"));
+
+        Assert.Equal("squirrelbox.orders-retry", opened.Entry.Deferred.Lane);
     }
 
     private static IInboxService CreateInbox()

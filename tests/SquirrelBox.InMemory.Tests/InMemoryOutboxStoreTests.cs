@@ -117,6 +117,25 @@ public sealed class InMemoryOutboxStoreTests
     }
 
     [Fact]
+    public async Task MarkPublishingAsync_appends_attempts_for_retried_envelope()
+    {
+        var store = new InMemoryOutboxStore();
+        var envelope = CreateEnvelope("pigeon", OutboxStatus.Pending);
+        await store.AddAsync(envelope);
+
+        await store.MarkPublishingAsync(envelope.Id, DateTimeOffset.UtcNow.AddSeconds(-1));
+        await store.MarkPublishingAsync(envelope.Id, DateTimeOffset.UtcNow);
+
+        var attempts = await store.QueryAttemptsAsync(new OutboxAttemptQuery
+        {
+            OutboxEnvelopeId = envelope.Id
+        });
+
+        Assert.Equal(2, attempts.Count);
+        Assert.All(attempts, attempt => Assert.Equal(OutboxAttemptState.Publishing, attempt.State));
+    }
+
+    [Fact]
     public async Task Failed_publish_records_outbox_attempt_failure()
     {
         var store = new InMemoryOutboxStore();
