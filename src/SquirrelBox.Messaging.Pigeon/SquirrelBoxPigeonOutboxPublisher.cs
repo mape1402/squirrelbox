@@ -14,6 +14,7 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
 {
     private readonly IPigeonPublisherInvoker _publisherInvoker;
     private readonly IOutboxEnvelopeSerializer _outboxSerializer;
+    private readonly IOutboxPayloadTypeNameResolver _payloadTypes;
     private readonly ISerializer _pigeonSerializer;
     private readonly ILogger<SquirrelBoxPigeonOutboxPublisher> _logger;
     private readonly SquirrelBoxPigeonOptions _options;
@@ -24,12 +25,14 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
     public SquirrelBoxPigeonOutboxPublisher(
         IPigeonPublisherInvoker publisherInvoker,
         IOutboxEnvelopeSerializer outboxSerializer,
+        IOutboxPayloadTypeNameResolver payloadTypes,
         ISerializer pigeonSerializer,
         IOptions<SquirrelBoxPigeonOptions> options,
         ILogger<SquirrelBoxPigeonOutboxPublisher> logger = null)
     {
         _publisherInvoker = publisherInvoker ?? throw new ArgumentNullException(nameof(publisherInvoker));
         _outboxSerializer = outboxSerializer ?? throw new ArgumentNullException(nameof(outboxSerializer));
+        _payloadTypes = payloadTypes ?? throw new ArgumentNullException(nameof(payloadTypes));
         _pigeonSerializer = pigeonSerializer ?? throw new ArgumentNullException(nameof(pigeonSerializer));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<SquirrelBoxPigeonOutboxPublisher>.Instance;
@@ -62,7 +65,7 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
 
     private PigeonPublishEnvelope DeserializePublishEnvelope(OutboxEnvelope envelope)
     {
-        var payloadType = ResolveType(envelope.PayloadType);
+        var payloadType = _payloadTypes.Resolve(envelope.PayloadType);
 
         if (payloadType == typeof(PigeonPublishEnvelope))
         {
@@ -83,11 +86,6 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
         throw new InvalidOperationException(
             $"SquirrelBox Pigeon outbox envelope payload type '{envelope.PayloadType}' is not supported.");
     }
-
-    private static Type ResolveType(string typeName)
-        => !string.IsNullOrWhiteSpace(typeName) && Type.GetType(typeName) is { } type
-            ? type
-            : throw new InvalidOperationException($"Pigeon outbox payload type '{typeName}' could not be resolved.");
 
     private static PigeonPublishEnvelope CreateLegacyEnvelope(
         OutboxEnvelope envelope,

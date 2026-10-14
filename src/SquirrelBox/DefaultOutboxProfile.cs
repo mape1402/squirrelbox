@@ -26,7 +26,7 @@ public sealed class DefaultOutboxProfile : IOutboxProfile
                 ? payloadType.FullName ?? payloadType.Name
                 : request.Operation,
             Destination = request.Destination,
-            PayloadType = payloadType.AssemblyQualifiedName,
+            PayloadType = context.PayloadTypes.GetName(payloadType),
             Payload = context.Serializer.Serialize(request.Payload, payloadType),
             ContentType = string.IsNullOrWhiteSpace(request.ContentType)
                 ? context.Serializer.ContentType

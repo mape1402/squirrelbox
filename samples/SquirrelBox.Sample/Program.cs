@@ -621,14 +621,19 @@ public sealed class SampleOutboxPublisher : IOutboxTransportPublisher
     public const string TransportName = "sample";
 
     private readonly IOutboxEnvelopeSerializer _serializer;
+    private readonly IOutboxPayloadTypeNameResolver _payloadTypes;
     private readonly SampleOrderStore _orders;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SampleOutboxPublisher"/> class.
     /// </summary>
-    public SampleOutboxPublisher(IOutboxEnvelopeSerializer serializer, SampleOrderStore orders)
+    public SampleOutboxPublisher(
+        IOutboxEnvelopeSerializer serializer,
+        IOutboxPayloadTypeNameResolver payloadTypes,
+        SampleOrderStore orders)
     {
         _serializer = serializer;
+        _payloadTypes = payloadTypes;
         _orders = orders;
     }
 
@@ -640,7 +645,7 @@ public sealed class SampleOutboxPublisher : IOutboxTransportPublisher
         OutboxEnvelope envelope,
         CancellationToken cancellationToken = default)
     {
-        var payloadType = Type.GetType(envelope.PayloadType, throwOnError: true)!;
+        var payloadType = _payloadTypes.Resolve(envelope.PayloadType);
         if (_serializer.Deserialize(envelope.Payload, payloadType) is OrderAuditMessage audit)
             _orders.MarkAudit(audit);
 

@@ -16,6 +16,7 @@ public sealed class DefaultOutboxService : IOutboxService
     private readonly ISquirrelBoxEventPublisher _events;
     private readonly ILogger<DefaultOutboxService> _logger;
     private readonly IOutboxEnvelopeSerializer _serializer;
+    private readonly IOutboxPayloadTypeNameResolver _payloadTypes;
     private readonly IOutboxStore _store;
     private readonly OutboxOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -28,6 +29,7 @@ public sealed class DefaultOutboxService : IOutboxService
         IOutboxContextAccessor contextAccessor,
         IOutboxProfileRegistry profiles,
         IOutboxEnvelopeSerializer serializer,
+        IOutboxPayloadTypeNameResolver payloadTypes,
         IOutboxStore store,
         IEnumerable<IOutboxDeferredScheduler> schedulers,
         IEnumerable<IOutboxTransportPublisher> publishers,
@@ -39,6 +41,7 @@ public sealed class DefaultOutboxService : IOutboxService
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+        _payloadTypes = payloadTypes ?? throw new ArgumentNullException(nameof(payloadTypes));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _schedulers = schedulers ?? throw new ArgumentNullException(nameof(schedulers));
         _publishers = publishers ?? throw new ArgumentNullException(nameof(publishers));
@@ -59,7 +62,7 @@ public sealed class DefaultOutboxService : IOutboxService
 
         var now = _timeProvider.GetUtcNow();
         var profile = _profiles.Resolve(request);
-        var envelope = profile.CreateEnvelope(request, new OutboxProfileContext(_serializer, _options, now));
+        var envelope = profile.CreateEnvelope(request, new OutboxProfileContext(_serializer, _payloadTypes, _options, now));
 
         ValidateEnvelope(envelope);
         await _store.AddAsync(envelope, cancellationToken);
