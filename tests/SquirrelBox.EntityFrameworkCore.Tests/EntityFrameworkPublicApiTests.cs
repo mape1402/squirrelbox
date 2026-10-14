@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using SquirrelBox;
 using SquirrelBox.EntityFrameworkCore;
@@ -42,5 +43,23 @@ public sealed class EntityFrameworkPublicApiTests
             Assert.Equal(typeof(ISquirrelBoxBuilder), firstParameter.ParameterType);
             Assert.NotEqual(typeof(IServiceCollection), firstParameter.ParameterType);
         });
+    }
+
+    [Fact]
+    public void Internal_options_extension_exposes_stable_model_cache_metadata()
+    {
+        var extensionType = typeof(EntityFrameworkSquirrelBoxServiceCollectionExtensions)
+            .Assembly
+            .GetType("SquirrelBox.EntityFrameworkCore.Internal.SquirrelBoxDbContextOptionsExtension", throwOnError: true);
+        var extension = (IDbContextOptionsExtension)Activator.CreateInstance(extensionType);
+        var debugInfo = new Dictionary<string, string>();
+
+        Assert.False(extension.Info.IsDatabaseProvider);
+        Assert.Equal("using SquirrelBox ", extension.Info.LogFragment);
+        Assert.NotEqual(0, extension.Info.GetServiceProviderHashCode());
+
+        extension.Info.PopulateDebugInfo(debugInfo);
+
+        Assert.True(debugInfo.ContainsKey("SquirrelBox"));
     }
 }

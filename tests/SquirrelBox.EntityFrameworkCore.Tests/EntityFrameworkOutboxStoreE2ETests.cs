@@ -130,6 +130,92 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
         Assert.Equal("publisher rejected", attempt.Failure.Details);
     }
 
+    [Fact]
+    public async Task SqlServer_outbox_marks_discarded_and_creates_attempt_when_no_publish_attempt_exists()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        Ulid envelopeId;
+
+        using (var scope = provider.CreateScope())
+        {
+            var envelope = await scope.ServiceProvider.GetRequiredService<IOutboxService>()
+                .EnqueueAsync(new OutboxEnqueueRequest
+                {
+                    Transport = "test",
+                    Operation = "orders.discarded",
+                    Destination = "orders",
+                    Payload = new TestPayload("discarded"),
+                    TraceId = "trace-discarded"
+                });
+            envelopeId = envelope.Id;
+        }
+
+        using (var markScope = provider.CreateScope())
+        {
+            await markScope.ServiceProvider.GetRequiredService<IOutboxStore>()
+                .MarkDiscardedAsync(envelopeId, DateTimeOffset.UtcNow);
+        }
+
+        using var verifyScope = provider.CreateScope();
+        var stored = await verifyScope.ServiceProvider.GetRequiredService<IOutboxService>()
+            .GetAsync(envelopeId);
+        var attempt = Assert.Single(await verifyScope.ServiceProvider
+            .GetRequiredService<IOutboxAttemptDiagnosticsStore>()
+            .QueryAttemptsAsync(new OutboxAttemptQuery { OutboxEnvelopeId = envelopeId, TraceId = "trace-discarded" }));
+
+        Assert.Equal(OutboxStatus.Discarded, stored.Status);
+        Assert.Equal(OutboxAttemptState.Discarded, attempt.State);
+        Assert.NotNull(attempt.CompletedOnUtc);
+        Assert.Equal("orders.discarded", attempt.Metadata["operation"]);
+    }
+
+    [Fact]
+    public async Task SqlServer_outbox_filters_queries_and_public_factory_constructor_reads_envelope()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var services = new ServiceCollection();
+        services.AddSingleton(new TestOutboxPublisher(true));
+        services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
+        services.AddDbContextFactory<TestSquirrelBoxDbContext>(options => options.UseSqlServer(connectionString));
+        services.AddSquirrelBox().UseEntityFramework<TestSquirrelBoxDbContext>();
+        await using var provider = services.BuildServiceProvider();
+        await EnsureDatabaseAsync(provider);
+        Ulid envelopeId;
+
+        using (var scope = provider.CreateScope())
+        {
+            var envelope = await scope.ServiceProvider.GetRequiredService<IOutboxService>()
+                .EnqueueAsync(new OutboxEnqueueRequest
+                {
+                    Transport = "factory",
+                    Operation = "orders.filtered",
+                    Destination = "orders",
+                    Payload = new TestPayload("filtered"),
+                    CorrelationId = "corr-filtered",
+                    Headers = { ["h"] = "v" },
+                    Metadata = { ["m"] = "v" }
+                });
+            envelopeId = envelope.Id;
+        }
+
+        var factory = provider.GetRequiredService<IDbContextFactory<TestSquirrelBoxDbContext>>();
+        var store = new EntityFrameworkOutboxStore<TestSquirrelBoxDbContext>(factory);
+        var byTransport = await store.QueryAsync(new OutboxQuery { Transport = "factory" });
+        var byOperation = await store.QueryAsync(new OutboxQuery { Operation = "orders.filtered" });
+        var byCorrelation = await store.QueryAsync(new OutboxQuery { CorrelationId = "corr-filtered", Limit = 0 });
+        var byStatus = await store.QueryAsync(new OutboxQuery { Status = OutboxStatus.Pending });
+        var stored = await store.GetAsync(envelopeId);
+
+        Assert.Single(byTransport);
+        Assert.Single(byOperation);
+        Assert.Single(byCorrelation);
+        Assert.Contains(byStatus, envelope => envelope.Id == envelopeId);
+        Assert.Equal("v", stored.Headers["h"]);
+        Assert.Equal("v", stored.Metadata["m"]);
+    }
+
     private static ServiceProvider CreateProvider(string connectionString, bool publisherSucceeds = true)
     {
         var services = new ServiceCollection();

@@ -275,6 +275,151 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.True(reopened.Accepted);
     }
 
+    [Fact]
+    public async Task SqlServer_store_attaches_verifies_and_rejects_payload_hashes()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        Ulid entryId;
+
+        using (var scope = provider.CreateScope())
+        {
+            var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+            var opened = await inbox.OpenOrContinueAsync(new InboxOpenRequest
+            {
+                Source = "http",
+                Operation = "POST /payload-hashes",
+                IdempotencyKey = "payload-hash-key"
+            });
+            entryId = opened.Entry.Id;
+        }
+
+        using var verificationScope = provider.CreateScope();
+        var store = verificationScope.ServiceProvider.GetRequiredService<IInboxStore>();
+        var attached = await store.AttachPayloadHashAsync(entryId, "hash-a");
+        var verified = await store.AttachPayloadHashAsync(entryId, "hash-a");
+        var conflict = await store.AttachPayloadHashAsync(entryId, "hash-b");
+
+        Assert.Equal(InboxPayloadVerificationState.Attached, attached.State);
+        Assert.Equal(InboxPayloadVerificationState.Verified, verified.State);
+        Assert.Equal(InboxPayloadVerificationState.PayloadConflict, conflict.State);
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.AttachPayloadHashAsync(entryId, " ").AsTask());
+    }
+
+    [Fact]
+    public async Task SqlServer_store_marks_failed_queries_by_filters_and_reopens_preserving_correlation_before_expiration()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        InboxOpenResult opened;
+
+        using (var scope = provider.CreateScope())
+        {
+            var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+            opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+                "messaging",
+                "orders.created",
+                "failed-key",
+                new TestPayload("failed-key"),
+                correlationId: "corr-original",
+                entryLifetime: TimeSpan.FromMinutes(5)));
+            await inbox.FailCurrentAsync(new InvalidOperationException("boom"));
+        }
+
+        using (var duplicateScope = provider.CreateScope())
+        {
+            var reopened = await duplicateScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(InboxOpenRequest.For(
+                    "messaging",
+                    "orders.created",
+                    "failed-key",
+                    new TestPayload("failed-key"),
+                    correlationId: "corr-new",
+                    entryLifetime: TimeSpan.FromMinutes(5)));
+
+            Assert.Equal(InboxOpenState.Opened, reopened.State);
+            Assert.Equal("corr-original", reopened.EffectiveCorrelationId);
+        }
+
+        using var verificationScope = provider.CreateScope();
+        var diagnostics = verificationScope.ServiceProvider.GetRequiredService<IInboxDiagnosticsStore>();
+        var byStatus = await diagnostics.QueryAsync(new InboxQuery { Status = InboxStatus.Started, Source = "messaging" });
+        var byOperation = await diagnostics.QueryAsync(new InboxQuery { Operation = "orders.created" });
+        var byKey = await diagnostics.QueryAsync(new InboxQuery { IdempotencyKey = "failed-key", Limit = 0 });
+
+        Assert.Single(byStatus);
+        Assert.Single(byOperation);
+        Assert.Single(byKey);
+        Assert.Equal(opened.Entry.Id, byKey.Single().Id);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_reports_payload_conflict_for_same_key_with_different_payload_hash()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+
+        using (var firstScope = provider.CreateScope())
+        {
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(InboxOpenRequest.For(
+                    "http",
+                    "POST /orders",
+                    "conflict-key",
+                    new TestPayload("payload-a"),
+                    entryLifetime: TimeSpan.FromMinutes(5)));
+        }
+
+        using var secondScope = provider.CreateScope();
+        var conflict = await secondScope.ServiceProvider.GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                "conflict-key",
+                new TestPayload("payload-b"),
+                entryLifetime: TimeSpan.FromMinutes(5)));
+
+        Assert.Equal(InboxOpenState.PayloadConflict, conflict.State);
+        Assert.False(conflict.Accepted);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_public_factory_constructor_uses_registered_db_context_factory()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var services = new ServiceCollection();
+        services.AddDbContextFactory<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
+        services.AddSquirrelBox().UseEntityFrameworkInbox<TestInboxDbContext>();
+        await using var provider = services.BuildServiceProvider();
+        await EnsureDatabaseAsync(provider);
+
+        var factory = provider.GetRequiredService<IDbContextFactory<TestInboxDbContext>>();
+        var store = new EntityFrameworkInboxStore<TestInboxDbContext>(factory);
+        var now = DateTimeOffset.UtcNow;
+        var opened = await store.TryOpenAsync(new InboxEntry
+        {
+            Id = Ulid.NewUlid(),
+            Source = "http",
+            Operation = "POST /factory",
+            IdempotencyKey = "factory-key",
+            IdempotencyKeyName = SquirrelBoxMetadataNames.IdempotencyKey,
+            IdempotencyKeySource = InboxIdempotencyKeySource.Explicit,
+            CorrelationId = "factory-correlation",
+            CorrelationIdName = SquirrelBoxMetadataNames.CorrelationId,
+            CorrelationIdSource = SquirrelBoxMetadataValueSource.Generated,
+            Status = InboxStatus.Started,
+            ExecutionMode = InboxExecutionMode.Inline,
+            PolicyName = "default",
+            CreatedOnUtc = now,
+            UpdatedOnUtc = now
+        });
+
+        Assert.Equal(InboxOpenState.Opened, opened.State);
+    }
+
     private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
         ServiceProvider provider,
         Action execute,
