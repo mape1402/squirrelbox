@@ -38,6 +38,8 @@ on:
 env:
   CHANGELOG_PATH: CHANGELOG.md
   CONFIGURATION: Release
+  COVERAGE_BADGE_PATH: assets/coverage-badge.json
+  COVERAGE_RESULTS: ./TestResults
   DOTNET_TARGET: .
   NUGET_OUTPUT: ./nupkgs
   NUGET_SOURCE: https://api.nuget.org/v3/index.json
@@ -96,15 +98,42 @@ jobs:
           --configuration "$CONFIGURATION"
           --verbosity normal
           --collect:"XPlat Code Coverage"
-          --results-directory ./TestResults
+          --settings coverlet.runsettings
+          --results-directory "$COVERAGE_RESULTS"
 
       - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: ./TestResults/**/coverage.cobertura.xml
+          path: ${{ env.COVERAGE_RESULTS }}/**/coverage.cobertura.xml
           if-no-files-found: warn
+
+      - name: Verify coverage
+        shell: pwsh
+        run: >
+          ./eng/coverage/Update-CoverageBadge.ps1
+          -CoverageRoot "$env:COVERAGE_RESULTS"
+          -BadgePath "$env:COVERAGE_BADGE_PATH"
+          -MinimumLineCoverage 99
+          -MinimumBranchCoverage 99
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- "$COVERAGE_BADGE_PATH"; then
+            echo "Coverage badge is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add "$COVERAGE_BADGE_PATH"
+          git commit -m "Update coverage badge"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Resolve release marker
         id: release
