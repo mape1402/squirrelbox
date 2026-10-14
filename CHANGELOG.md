@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Added configurable EF Core storage mappings from dependency registration, including schema/table customization, entity-level configuration hooks, and ULID text or SQL Server `binary(16)` storage.
 - Added outbox attempt diagnostics so each publish lifecycle records `Publishing`, `Published`, `Failed`, or `Discarded` attempts with trace ids, metadata, completion timestamps, and failures.
 - Added `IOutboxPayloadTypeNameResolver` so outbox payload type names can be compact by default and replaced by hosts that need stable aliases.
-- Added a reproducible coverage badge pipeline with Cobertura collection, percentage badge JSON generation, and CI coverage threshold validation.
+- Added a reproducible Cobertura coverage pipeline that enforces at least 99% line and branch coverage and publishes both percentages in the README badge.
 - Added focused unit and integration coverage for dashboard authentication, Pigeon rejection/deferred failure paths, operation replay/failure paths, and in-memory store lifecycle branches.
 - Added a new README hero image focused on inbox/outbox flow, metadata propagation, and durable execution.
 
