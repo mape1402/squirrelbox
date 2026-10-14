@@ -37,4 +37,15 @@ public sealed class SquirrelBoxPigeonRegistrationTests
         Assert.Equal("custom-pigeon", options.Transport);
         Assert.True(options.EnableOutbox);
     }
+
+    [Fact]
+    public void AddSquirrelBoxPigeon_supports_default_options_registration()
+    {
+        var services = new ServiceCollection();
+
+        services.AddSquirrelBoxPigeon();
+        using var provider = services.BuildServiceProvider();
+
+        Assert.NotNull(provider.GetRequiredService<IOptions<SquirrelBoxPigeonOptions>>().Value);
+    }
 }

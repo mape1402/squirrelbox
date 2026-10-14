@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using SquirrelBox.InMemory;
 
 namespace SquirrelBox.Messaging.Tests;
@@ -268,6 +269,174 @@ public sealed class InboxMessageServiceE2ETests
 
         Assert.Equal("corr-as-key", opened.EffectiveIdempotencyKey);
         Assert.Equal("corr-as-key", opened.EffectiveCorrelationId);
+    }
+
+    [Fact]
+    public async Task OpenAsync_uses_message_id_with_default_name_when_metadata_key_is_missing()
+    {
+        var provider = CreateProvider(configureMessaging: options => options.MessageIdMetadataName = " ");
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            MessageId = "message-id-key",
+            Payload = new OrderMessage("order-message-id")
+        });
+
+        Assert.Equal("message-id-key", opened.EffectiveIdempotencyKey);
+        Assert.Equal("message-id", opened.OpenResult.Entry.IdempotencyKeyName);
+    }
+
+    [Fact]
+    public async Task OpenAsync_uses_correlation_when_message_id_fallback_is_disabled_and_metadata_is_empty()
+    {
+        var provider = CreateProvider(configureMessaging: options =>
+        {
+            options.UseMessageIdWhenKeyIsMissing = false;
+            options.UseCorrelationIdWhenKeyIsMissing = true;
+        });
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            MessageId = "ignored-message-id",
+            CorrelationId = "correlation-key",
+            Payload = new OrderMessage("order-correlation-fallback"),
+            Metadata = new Dictionary<string, string>
+            {
+                [SquirrelBoxMetadataNames.MetadataSection] = "{}"
+            }
+        });
+
+        Assert.Equal("correlation-key", opened.EffectiveIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task OpenAsync_uses_context_trace_and_default_operation_parts_when_optional_values_are_blank()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "",
+            Subscription = null,
+            Operation = " ",
+            MessageId = "blank-operation-key",
+            CorrelationId = "context-correlation",
+            TraceId = "context-trace",
+            Payload = new OrderMessage("order-blank-operation")
+        });
+
+        Assert.Equal("orders:unversioned/default/message", opened.OpenResult.Entry.Operation);
+        Assert.Equal("context-correlation", opened.EffectiveCorrelationId);
+        Assert.Equal("context-trace", opened.EffectiveTraceId);
+        Assert.Equal("orders", opened.OpenResult.Entry.Metadata["topic"]);
+        Assert.False(opened.OpenResult.Entry.Metadata.ContainsKey("version"));
+    }
+
+    [Fact]
+    public void Default_operation_resolver_uses_unknown_topic_when_topic_is_blank()
+    {
+        var operation = new SquirrelBoxMessagingOptions().OperationResolver(new InboxMessageContext
+        {
+            Topic = " ",
+            Version = " ",
+            Subscription = " ",
+            Operation = " "
+        });
+
+        Assert.Equal("unknown-topic:unversioned/default/message", operation);
+    }
+
+    [Fact]
+    public async Task OpenAsync_accepts_null_transport_metadata_and_null_payload()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+
+        var opened = await scope.ServiceProvider.GetRequiredService<IInboxMessageService>()
+            .OpenAsync(new InboxMessageContext
+            {
+                Transport = "rabbitmq",
+                Topic = "orders",
+                MessageId = "null-metadata-key",
+                Metadata = null,
+                Payload = null
+            });
+
+        Assert.True(opened.ShouldExecute);
+        Assert.Equal("null-metadata-key", opened.EffectiveIdempotencyKey);
+        Assert.Null(opened.OpenResult.Entry.PayloadType);
+    }
+
+    [Fact]
+    public async Task OpenAsync_uses_global_execution_mode_resolver_as_last_fallback()
+    {
+        var provider = CreateProvider(configureMessaging: options =>
+            options.ExecutionModeResolver = _ => InboxExecutionMode.Deferred);
+        using var scope = provider.CreateScope();
+
+        var opened = await scope.ServiceProvider.GetRequiredService<IInboxMessageService>()
+            .OpenAsync(new InboxMessageContext
+            {
+                Transport = "rabbitmq",
+                Topic = "orders",
+                MessageId = "global-mode",
+                Payload = new OrderMessage("global-mode")
+            });
+
+        Assert.Equal(InboxExecutionMode.Deferred, opened.OpenResult.Entry.ExecutionMode);
+    }
+
+    [Fact]
+    public void Metadata_resolvers_accept_a_null_structured_model()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = Assert.IsType<DefaultInboxMessageService>(
+            scope.ServiceProvider.GetRequiredService<IInboxMessageService>());
+        var context = new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            MessageId = "message",
+            CorrelationId = "correlation",
+            TraceId = "trace"
+        };
+
+        AssertResolvedValue(service, "ResolveIdempotencyKey", context, "message");
+        AssertResolvedValue(service, "ResolveCorrelationId", context, "correlation");
+        AssertResolvedValue(service, "ResolveTraceId", context, "trace");
+    }
+
+    private static void AssertResolvedValue(
+        DefaultInboxMessageService service,
+        string methodName,
+        InboxMessageContext context,
+        string expected)
+    {
+        var method = typeof(DefaultInboxMessageService).GetMethod(
+            methodName,
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var resolved = method.Invoke(service, [context, null])!;
+        var value = resolved.GetType().GetProperty("Value")!.GetValue(resolved);
+
+        Assert.Equal(expected, value);
     }
 
     private static ServiceProvider CreateProvider(

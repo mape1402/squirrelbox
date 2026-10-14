@@ -34,6 +34,43 @@ public sealed class SquirrelBoxMessageMetadataTests
                 [SquirrelBoxMetadataNames.MetadataSection] = "{}"
             },
             out _));
+        Assert.False(SquirrelBoxMessageMetadata.TryReadFrom(
+            new Dictionary<string, string>
+            {
+                [SquirrelBoxMetadataNames.MetadataSection] = "null"
+            },
+            out _));
+    }
+
+    [Fact]
+    public void Properties_handle_null_metadata_and_attempt_values()
+    {
+        var nullMetadata = new SquirrelBoxMessageMetadata { Metadata = null };
+        var full = CreateMetadata();
+
+        Assert.False(nullMetadata.HasValues);
+        Assert.Null(nullMetadata.IdempotencyKey);
+        Assert.Null(nullMetadata.CorrelationId);
+        Assert.Null(nullMetadata.AttemptId);
+        Assert.Null(nullMetadata.TraceId);
+        Assert.Equal("attempt-1", full.AttemptId);
+        Assert.Equal("trace-1", full.TraceId);
+    }
+
+    [Fact]
+    public void WriteTo_skips_empty_metadata_and_overwrites_existing_section_by_default()
+    {
+        var emptyTarget = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var target = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SquirrelBoxMetadataNames.MetadataSection] = "{\"idempotencyKey\":\"old\"}"
+        };
+
+        SquirrelBoxMessageMetadata.Empty.WriteTo(emptyTarget);
+        CreateMetadata().WriteTo(target);
+
+        Assert.Empty(emptyTarget);
+        Assert.Contains("key-1", target[SquirrelBoxMetadataNames.MetadataSection], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -71,6 +108,20 @@ public sealed class SquirrelBoxMessageMetadataTests
         Assert.False(disabled.Enabled);
         Assert.True(disabled.ShouldExecute);
         Assert.Same(SquirrelBoxMessageMetadata.Empty, disabled.EffectiveMetadata);
+    }
+
+    [Fact]
+    public void Inbox_message_open_result_exposes_null_effective_values_when_open_result_is_missing()
+    {
+        var result = new InboxMessageOpenResult(null, null, Metadata: null);
+
+        Assert.False(result.Enabled);
+        Assert.True(result.ShouldExecute);
+        Assert.Null(result.EffectiveIdempotencyKey);
+        Assert.Null(result.EffectiveCorrelationId);
+        Assert.Null(result.EffectiveAttemptId);
+        Assert.Null(result.EffectiveTraceId);
+        Assert.Same(SquirrelBoxMessageMetadata.Empty, result.EffectiveMetadata);
     }
 
     private static SquirrelBoxMessageMetadata CreateMetadata()

@@ -83,7 +83,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
             return MapDecision(open.Decision);
         }
 
-        if (open.OpenResult.Entry?.ExecutionMode == InboxExecutionMode.Deferred)
+        if (open.OpenResult.Entry.ExecutionMode == InboxExecutionMode.Deferred)
         {
             var envelope = WithVersion(_envelopeFactory.Create(context), version);
             envelope.Metadata[SquirrelBoxPigeonMetadataNames.Version] = version.ToString();
