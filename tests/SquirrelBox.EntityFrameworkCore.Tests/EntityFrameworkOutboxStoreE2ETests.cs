@@ -216,6 +216,22 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
         Assert.Equal("v", stored.Metadata["m"]);
     }
 
+    [Fact]
+    public async Task SqlServer_outbox_handles_unfiltered_queries_and_missing_envelopes()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        using var scope = provider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IOutboxStore>();
+        var attempts = scope.ServiceProvider.GetRequiredService<IOutboxAttemptDiagnosticsStore>();
+
+        Assert.Empty(await store.QueryAsync(null));
+        Assert.Empty(await attempts.QueryAttemptsAsync(null));
+        await Assert.ThrowsAsync<KeyNotFoundException>(async () =>
+            await store.GetAsync(Ulid.NewUlid()).AsTask());
+    }
+
     private static ServiceProvider CreateProvider(string connectionString, bool publisherSucceeds = true)
     {
         var services = new ServiceCollection();

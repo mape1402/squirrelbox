@@ -420,6 +420,43 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         Assert.Equal(InboxOpenState.Opened, opened.State);
     }
 
+    [Fact]
+    public async Task SqlServer_store_handles_null_terminal_data_unfiltered_queries_and_missing_entries()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+        using var scope = provider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IInboxStore>();
+        var diagnostics = scope.ServiceProvider.GetRequiredService<IInboxDiagnosticsStore>();
+        var now = DateTimeOffset.UtcNow;
+        var entries = Enumerable.Range(0, 3)
+            .Select(index => new InboxEntry
+            {
+                Id = Ulid.NewUlid(),
+                Source = "http",
+                Operation = $"POST /null-terminal/{index}",
+                IdempotencyKey = $"null-terminal-{index}",
+                IdempotencyKeySource = InboxIdempotencyKeySource.Explicit,
+                Status = InboxStatus.Started,
+                ExecutionMode = InboxExecutionMode.Inline,
+                CreatedOnUtc = now,
+                UpdatedOnUtc = now
+            })
+            .ToArray();
+
+        foreach (var entry in entries)
+            Assert.Equal(InboxOpenState.Opened, (await store.TryOpenAsync(entry)).State);
+
+        await store.MarkCompletedAsync(entries[0].Id, null, now);
+        await store.MarkFailedAsync(entries[1].Id, null, now);
+        await store.MarkRetryingAsync(entries[2].Id, null, now);
+
+        Assert.Equal(3, (await diagnostics.QueryAsync(null)).Count);
+        await Assert.ThrowsAsync<InboxEntryNotFoundException>(async () =>
+            await store.GetAsync(Ulid.NewUlid()).AsTask());
+    }
+
     private static async Task<InboxOpenResult> ExecuteProtectedWorkAsync(
         ServiceProvider provider,
         Action execute,
