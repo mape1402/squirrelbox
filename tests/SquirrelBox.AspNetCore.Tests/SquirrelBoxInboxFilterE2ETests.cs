@@ -12,7 +12,7 @@ using SquirrelBox.InMemory;
 
 namespace SquirrelBox.AspNetCore.Tests;
 
-public sealed class SquirrelBoxPayloadFilterE2ETests
+public sealed class SquirrelBoxInboxFilterE2ETests
 {
     [Fact]
     public async Task Minimal_api_filter_reopens_completed_entry_after_configured_window()
@@ -306,7 +306,7 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                             context.Response.Headers.ETag = $"\"minimal-{request.Id}\"";
                             return Results.Created($"/minimal-orders/{request.Id}", new { request.Id });
                         })
-                        .WithSquirrelBoxPayload();
+                        .WithSquirrelBoxInbox();
 
                     endpoints
                         .MapPost("/minimal-identity", (
@@ -317,7 +317,7 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                                 request.Id,
                                 IdempotencyKey = identityAccessor.Current?.Operation.IdempotencyKey.Value
                             }))
-                        .WithSquirrelBoxPayload();
+                        .WithSquirrelBoxInbox();
 
                     endpoints
                         .MapPost("/minimal-deferred-orders", (PayloadOrderRequest request, IInboxService inbox) =>
@@ -335,7 +335,7 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                                 InProgressTimeoutMs = Convert.ToInt32(entry.Deferred.InProgressTimeout?.TotalMilliseconds)
                             });
                         })
-                        .WithSquirrelBoxPayload(options =>
+                        .WithSquirrelBoxInbox(options =>
                         {
                             options.ExecutionMode = InboxExecutionMode.Deferred;
                             options.Deferred.Lane = "minimal-deferred";
@@ -354,7 +354,7 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                                     request.Id,
                                     Execution = Interlocked.Increment(ref windowExecutions)
                                 }))
-                        .WithSquirrelBoxPayload(options => options.EntryLifetime = TimeSpan.FromSeconds(5));
+                        .WithSquirrelBoxInbox(options => options.EntryLifetime = TimeSpan.FromSeconds(5));
 
                     endpoints
                         .MapPost("/minimal-forever-orders", (PayloadOrderRequest request) =>
@@ -365,7 +365,7 @@ public sealed class SquirrelBoxPayloadFilterE2ETests
                                     request.Id,
                                     Execution = Interlocked.Increment(ref foreverExecutions)
                                 }))
-                        .WithSquirrelBoxPayload(options =>
+                        .WithSquirrelBoxInbox(options =>
                         {
                             options.EntryLifetime = TimeSpan.FromSeconds(5);
                             options.CompletedLock = InboxCompletedLockMode.Forever;
@@ -416,7 +416,7 @@ public sealed class PayloadOrdersController : ControllerBase
     }
 
     [HttpPost]
-    [SquirrelBoxPayload]
+    [SquirrelBoxInbox]
     public IActionResult Create(PayloadOrderRequest request)
     {
         Response.Headers.ETag = $"\"mvc-{request.Id}\"";
@@ -424,7 +424,7 @@ public sealed class PayloadOrdersController : ControllerBase
     }
 
     [HttpPost("custom")]
-    [SquirrelBoxPayload("payload")]
+    [SquirrelBoxInbox("payload")]
     public IActionResult Custom(PayloadOrderRequest payload)
     {
         Response.Headers.ETag = $"\"mvc-custom-{payload.Id}\"";
@@ -432,7 +432,7 @@ public sealed class PayloadOrdersController : ControllerBase
     }
 
     [HttpPost("window")]
-    [SquirrelBoxPayload(TtlSeconds = 5)]
+    [SquirrelBoxInbox(TtlSeconds = 5)]
     public IActionResult Window(PayloadOrderRequest request)
         => Created(
             $"/payload-orders/{request.Id}",
@@ -443,7 +443,7 @@ public sealed class PayloadOrdersController : ControllerBase
             });
 
     [HttpPost("forever")]
-    [SquirrelBoxPayload(TtlSeconds = 5, CompletedLock = InboxCompletedLockMode.Forever)]
+    [SquirrelBoxInbox(TtlSeconds = 5, CompletedLock = InboxCompletedLockMode.Forever)]
     public IActionResult Forever(PayloadOrderRequest request)
         => Created(
             $"/payload-orders/{request.Id}",
@@ -454,7 +454,7 @@ public sealed class PayloadOrdersController : ControllerBase
             });
 
     [HttpPost("deferred")]
-    [SquirrelBoxPayload(
+    [SquirrelBoxInbox(
         DeferExecution = true,
         DeferredLane = "mvc-deferred",
         RetryMaxAttempts = 5,

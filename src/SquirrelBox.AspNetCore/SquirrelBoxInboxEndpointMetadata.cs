@@ -1,8 +1,8 @@
 namespace SquirrelBox.AspNetCore;
 
-internal sealed class SquirrelBoxPayloadEndpointMetadata : ISquirrelBoxPayloadMetadata
+internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetadata
 {
-    public SquirrelBoxPayloadEndpointMetadata(SquirrelBoxPayloadOptions options)
+    public SquirrelBoxInboxEndpointMetadata(SquirrelBoxInboxEndpointOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 

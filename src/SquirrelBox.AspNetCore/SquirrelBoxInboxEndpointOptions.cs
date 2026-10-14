@@ -3,7 +3,7 @@ namespace SquirrelBox.AspNetCore;
 /// <summary>
 /// Configures inbox behavior for an ASP.NET Core payload entrypoint.
 /// </summary>
-public sealed class SquirrelBoxPayloadOptions
+public sealed class SquirrelBoxInboxEndpointOptions
 {
     /// <summary>
     /// Gets or sets the endpoint argument name that contains the payload used for idempotency hashing.

@@ -199,7 +199,7 @@ app.MapPost("/orders/computed-key", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload();
+.WithSquirrelBoxInbox();
 
 app.MapPost("/orders/window", async (
     CreateOrderRequest request,
@@ -212,7 +212,7 @@ app.MapPost("/orders/window", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options => options.EntryLifetime = TimeSpan.FromSeconds(30));
+.WithSquirrelBoxInbox(options => options.EntryLifetime = TimeSpan.FromSeconds(30));
 
 app.MapPost("/orders/forever", async (
     CreateOrderRequest request,
@@ -225,7 +225,7 @@ app.MapPost("/orders/forever", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options =>
+.WithSquirrelBoxInbox(options =>
 {
     options.EntryLifetime = TimeSpan.FromSeconds(30);
     options.CompletedLock = InboxCompletedLockMode.Forever;
@@ -242,7 +242,7 @@ app.MapPost("/orders/deferred", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options => options.PolicyName = "orders-deferred");
+.WithSquirrelBoxInbox(options => options.PolicyName = "orders-deferred");
 
 app.MapPost("/orders/deferred-slow", async (
     CreateOrderRequest request,
@@ -255,7 +255,7 @@ app.MapPost("/orders/deferred-slow", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options =>
+.WithSquirrelBoxInbox(options =>
 {
     options.PolicyName = "orders-deferred-slow";
     options.ExecutionMode = InboxExecutionMode.Deferred;
@@ -272,7 +272,7 @@ app.MapPost("/orders/deferred-flaky", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options =>
+.WithSquirrelBoxInbox(options =>
 {
     options.PolicyName = "orders-deferred-retry-demo";
     options.ExecutionMode = InboxExecutionMode.Deferred;
@@ -289,7 +289,7 @@ app.MapPost("/orders/deferred-failing", async (
 
     return ToHttpResult(result);
 })
-.WithSquirrelBoxPayload(options =>
+.WithSquirrelBoxInbox(options =>
 {
     options.PolicyName = "orders-deferred-retry-demo";
     options.ExecutionMode = InboxExecutionMode.Deferred;
