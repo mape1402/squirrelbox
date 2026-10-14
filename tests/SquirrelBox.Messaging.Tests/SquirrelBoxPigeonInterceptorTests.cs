@@ -54,6 +54,56 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     }
 
     [Fact]
+    public async Task DecisionInterceptor_rejects_when_message_has_no_idempotency_material()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(
+            scope.ServiceProvider,
+            useDefaultMessage: false,
+            message: null,
+            messageType: null,
+            operation: null,
+            rawMetadata: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        var decision = await interceptor.InterceptAsync(context);
+
+        Assert.NotEqual(PigeonConsumeDecision.Continue, decision.Decision);
+        Assert.Contains(
+            "MissingIdempotencyKey",
+            decision.Reason,
+            StringComparison.Ordinal);
+        Assert.Empty(decision.Metadata);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_uses_custom_operation_version_and_message_id_resolvers()
+    {
+        using var provider = CreateProvider(options =>
+        {
+            options.MessageIdMetadataName = "custom-message-id";
+            options.OperationResolver = _ => "resolved-operation";
+            options.VersionResolver = _ => SemanticVersion.Parse("2.5.0");
+        });
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(
+            scope.ServiceProvider,
+            rawMetadata: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["custom-message-id"] = "message-from-metadata"
+            });
+
+        var decision = await interceptor.InterceptAsync(context);
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+
+        Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
+        Assert.Equal("message-from-metadata", inbox.Current.EffectiveIdempotencyKey);
+        Assert.Equal("orders:2.5.0/billing/resolved-operation", inbox.Current.Entry.Operation);
+    }
+
+    [Fact]
     public async Task ExecutionInterceptor_completes_inbox_after_successful_handler()
     {
         using var provider = CreateProvider();
@@ -124,6 +174,23 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         AssertNoFlatIdentityMetadata(envelope.Metadata);
         AssertNoFlatIdentityMetadata(result.Metadata);
         Assert.Null(scope.ServiceProvider.GetRequiredService<IInboxService>().Current);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_marks_current_inbox_failed_when_deferred_scheduling_fails()
+    {
+        using var provider = CreateProvider(options => options.ExecutionModeResolver = _ => InboxExecutionMode.Deferred);
+        using var scope = provider.CreateScope();
+        var scheduler = scope.ServiceProvider.GetRequiredService<FakeInboxMuleScheduler>();
+        scheduler.ExceptionToThrow = new InvalidOperationException("scheduler failed");
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(scope.ServiceProvider);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => interceptor.InterceptAsync(context).AsTask());
+
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        Assert.Equal(InboxStatus.Failed, inbox.LastContext.Entry.Status);
+        Assert.Equal("scheduler failed", inbox.LastContext.Entry.FailureDetails.ErrorMessage);
     }
 
     [Fact]
@@ -294,17 +361,23 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     private static ConsumeContext CreateContext(
         IServiceProvider services,
         ConsumeExecutionSource executionSource = ConsumeExecutionSource.BrokerDelivery,
-        SemanticVersion? version = null)
+        SemanticVersion? version = null,
+        object message = null,
+        Type messageType = null,
+        string operation = null,
+        IReadOnlyDictionary<string, string> rawMetadata = null,
+        bool useDefaultMessage = true)
         => new()
         {
             Services = services,
             Topic = "orders",
             Subscription = "billing",
             MessageVersion = version ?? SemanticVersion.Parse("1.2.0"),
-            Message = new OrderMessage("order-1"),
-            MessageType = typeof(OrderMessage),
+            Message = useDefaultMessage ? message ?? new OrderMessage("order-1") : message,
+            MessageType = useDefaultMessage ? messageType ?? typeof(OrderMessage) : messageType,
+            Operation = operation,
             ExecutionSource = executionSource,
-            RawMetadata = CreateRawMetadata("pigeon-key")
+            RawMetadata = rawMetadata ?? CreateRawMetadata("pigeon-key")
         };
 
     private sealed record OrderMessage(string Id);
@@ -371,12 +444,17 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     {
         public List<object> Payloads { get; } = [];
 
+        public Exception ExceptionToThrow { get; set; }
+
         public ValueTask<Guid> EnqueueCurrentAsync<TPayload>(
             ActionKey key,
             TPayload payload,
             Action<EnqueueOptions> configure = null,
             CancellationToken cancellationToken = default)
         {
+            if (ExceptionToThrow is not null)
+                throw ExceptionToThrow;
+
             Payloads.Add(payload);
             configure?.Invoke(new EnqueueOptions());
             return ValueTask.FromResult(Guid.NewGuid());
