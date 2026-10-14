@@ -66,7 +66,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(context.Metadata, StringComparer.OrdinalIgnoreCase);
         SquirrelBoxMessageMetadata.TryReadFrom(metadata, out var squirrelBoxMetadata);
-        if (squirrelBoxMetadata?.HasValues != true)
+        if (!squirrelBoxMetadata.HasValues)
         {
             _logger.LogWarning(
                 SquirrelBoxLogEvents.MessagingMetadataMissing,

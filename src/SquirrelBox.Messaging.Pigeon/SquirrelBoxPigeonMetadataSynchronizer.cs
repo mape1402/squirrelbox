@@ -108,10 +108,7 @@ internal static class SquirrelBoxPigeonMetadataSynchronizer
         if (payload is null)
             return envelope;
 
-        var metadataProperty = payloadType.GetProperty(nameof(WrappedPayload<object>.Metadata));
-        if (metadataProperty is null || !metadataProperty.CanWrite)
-            return envelope;
-
+        var metadataProperty = payloadType.GetProperty(nameof(WrappedPayload<object>.Metadata))!;
         var wrappedMetadata = ToMutableMetadata(metadataProperty.GetValue(payload));
         if (ContainsStructuredMetadata(wrappedMetadata))
             return envelope;

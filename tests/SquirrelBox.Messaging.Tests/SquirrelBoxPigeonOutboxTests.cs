@@ -352,6 +352,29 @@ public sealed class SquirrelBoxPigeonOutboxTests
     }
 
     [Fact]
+    public async Task PigeonOutboxPublisher_converts_null_legacy_payload_to_empty_body_without_version_metadata()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var legacyPayload = new SquirrelBoxPigeonOutboxPayload
+        {
+            Payload = null,
+            PayloadType = typeof(OrderMessage).AssemblyQualifiedName,
+            Topic = "orders",
+            IsRaw = true
+        };
+        var envelope = CreateEnvelope(outboxSerializer, legacyPayload, typeof(SquirrelBoxPigeonOutboxPayload));
+
+        var result = await provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>()
+            .PublishAsync(envelope);
+
+        Assert.True(result.Succeeded);
+        var published = Assert.Single(provider.GetRequiredService<FakePigeonPublisherInvoker>().Published);
+        Assert.Empty(published.Payload);
+        Assert.Null(published.Version);
+    }
+
+    [Fact]
     public void PigeonMetadataSynchronizer_ignores_blank_metadata_json()
     {
         var envelope = CreatePublishEnvelope(isRaw: false);
@@ -359,6 +382,38 @@ public sealed class SquirrelBoxPigeonOutboxTests
         var enriched = EnrichWithMetadataJson(envelope, " ");
 
         Assert.Same(envelope, enriched);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_ignores_missing_metadata_model()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false);
+
+        var enriched = EnrichWithMetadata(envelope, null);
+
+        Assert.Same(envelope, enriched);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_requires_envelope_and_serializer()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false);
+
+        Assert.Throws<TargetInvocationException>(() => EnrichWithMetadata(null, new SquirrelBoxMessageMetadata()));
+        Assert.Throws<TargetInvocationException>(() => EnrichWithMetadata(envelope, new SquirrelBoxMessageMetadata(), serializer: null, useDefaultSerializer: false));
+        Assert.Throws<TargetInvocationException>(() => EnrichWithMetadataJson(null, "{}"));
+        Assert.Throws<TargetInvocationException>(() => EnrichWithMetadataJson(envelope, "{}", serializer: null, useDefaultSerializer: false));
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_preserves_invalid_json_on_envelope_metadata()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false, metadataNull: true);
+
+        var enriched = EnrichWithMetadataJson(envelope, "{not-json");
+
+        Assert.Equal("{not-json", enriched.Metadata[SquirrelBoxMetadataNames.MetadataSection]);
+        Assert.Null(envelope.Metadata);
     }
 
     [Fact]
@@ -370,6 +425,55 @@ public sealed class SquirrelBoxPigeonOutboxTests
 
         Assert.Equal("{}", enriched.Metadata[SquirrelBoxMetadataNames.MetadataSection]);
         Assert.Equal(envelope.Payload, enriched.Payload);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_keeps_json_null_metadata_on_envelope_only()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false);
+
+        var enriched = EnrichWithMetadataJson(envelope, "null");
+
+        Assert.Equal("null", enriched.Metadata[SquirrelBoxMetadataNames.MetadataSection]);
+        Assert.Equal(envelope.Payload, enriched.Payload);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_keeps_null_payload_unchanged()
+    {
+        var envelope = new PigeonPublishEnvelope
+        {
+            Transport = "pigeon",
+            Topic = "orders",
+            Payload = null,
+            PayloadType = typeof(OrderMessage).AssemblyQualifiedName,
+            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        };
+        var metadataJson = JsonSerializer.Serialize(
+            new SquirrelBoxMetadata { IdempotencyKey = "key" },
+            JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson);
+
+        Assert.Null(enriched.Payload);
+    }
+
+    [Theory]
+    [InlineData(true, "")]
+    [InlineData(false, "")]
+    [InlineData(false, "System.String")]
+    public void PigeonMetadataSynchronizer_keeps_payload_when_raw_empty_or_not_wrapped(bool isRaw, string payloadType)
+    {
+        var envelope = CreatePublishEnvelope(isRaw, payload: [], payloadType: payloadType);
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "key"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson);
+
+        Assert.Equal(envelope.Payload, enriched.Payload);
+        Assert.Equal("key", ReadSquirrelBoxMetadata(enriched.Metadata).IdempotencyKey);
     }
 
     [Fact]
@@ -512,7 +616,12 @@ public sealed class SquirrelBoxPigeonOutboxTests
         return context;
     }
 
-    private static PigeonPublishEnvelope CreatePublishEnvelope(bool isRaw)
+    private static PigeonPublishEnvelope CreatePublishEnvelope(
+        bool isRaw,
+        byte[] payload = null,
+        string payloadType = null,
+        IReadOnlyDictionary<string, string> metadata = null,
+        bool metadataNull = false)
         => new()
         {
             Transport = "pigeon",
@@ -522,16 +631,20 @@ public sealed class SquirrelBoxPigeonOutboxTests
             Destination = "orders",
             RoutingKey = "orders",
             ContentType = "application/json",
-            Payload = JsonSerializer.SerializeToUtf8Bytes(new OrderMessage("order-1"), JsonOptions),
-            PayloadType = typeof(OrderMessage).AssemblyQualifiedName,
+            Payload = payload ?? JsonSerializer.SerializeToUtf8Bytes(new OrderMessage("order-1"), JsonOptions),
+            PayloadType = payloadType ?? typeof(OrderMessage).AssemblyQualifiedName,
             Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["x-tenant"] = "north"
             },
-            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["tenant"] = "north"
-            },
+            Metadata = metadataNull
+                ? null
+                : new Dictionary<string, string>(
+                    metadata ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["tenant"] = "north"
+                    },
+                    StringComparer.OrdinalIgnoreCase),
             CorrelationId = "corr-1",
             TraceId = "trace-1",
             IsRaw = isRaw
@@ -693,7 +806,8 @@ public sealed class SquirrelBoxPigeonOutboxTests
     private static PigeonPublishEnvelope EnrichWithMetadataJson(
         PigeonPublishEnvelope envelope,
         string metadataJson,
-        ISerializer serializer = null)
+        ISerializer serializer = null,
+        bool useDefaultSerializer = true)
     {
         var synchronizer = typeof(SquirrelBoxPigeonOutboxPublisher)
             .Assembly
@@ -705,7 +819,26 @@ public sealed class SquirrelBoxPigeonOutboxTests
             types: [typeof(PigeonPublishEnvelope), typeof(string), typeof(ISerializer), typeof(ILogger)],
             modifiers: null);
 
-        return (PigeonPublishEnvelope)method.Invoke(null, [envelope, metadataJson, serializer ?? new FakePigeonSerializer(), null]);
+        return (PigeonPublishEnvelope)method.Invoke(null, [envelope, metadataJson, serializer ?? (useDefaultSerializer ? new FakePigeonSerializer() : null), null]);
+    }
+
+    private static PigeonPublishEnvelope EnrichWithMetadata(
+        PigeonPublishEnvelope envelope,
+        SquirrelBoxMessageMetadata metadata,
+        ISerializer serializer = null,
+        bool useDefaultSerializer = true)
+    {
+        var synchronizer = typeof(SquirrelBoxPigeonOutboxPublisher)
+            .Assembly
+            .GetType("SquirrelBox.Messaging.Pigeon.SquirrelBoxPigeonMetadataSynchronizer", throwOnError: true);
+        var method = synchronizer.GetMethod(
+            "Enrich",
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: [typeof(PigeonPublishEnvelope), typeof(SquirrelBoxMessageMetadata), typeof(ISerializer), typeof(ILogger)],
+            modifiers: null);
+
+        return (PigeonPublishEnvelope)method.Invoke(null, [envelope, metadata, serializer ?? (useDefaultSerializer ? new FakePigeonSerializer() : null), null]);
     }
 
     private static bool IsFlatIdentityKey(string key)

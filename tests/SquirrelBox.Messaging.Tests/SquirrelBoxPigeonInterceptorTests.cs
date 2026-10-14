@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Mule;
+using NSubstitute;
 using Pigeon.Messaging.Consuming.Dispatching;
 using Pigeon.Messaging.Contracts;
 using SquirrelBox.InMemory;
@@ -79,6 +80,26 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     }
 
     [Fact]
+    public async Task DecisionInterceptor_rejects_a_non_missing_key_duplicate_path()
+    {
+        using var provider = CreateProvider();
+        using (var firstScope = provider.CreateScope())
+        {
+            var first = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(firstScope.ServiceProvider);
+            await first.InterceptAsync(CreateContext(firstScope.ServiceProvider));
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>().CompleteCurrentAsync();
+        }
+
+        using var secondScope = provider.CreateScope();
+        var second = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(secondScope.ServiceProvider);
+
+        var decision = await second.InterceptAsync(CreateContext(secondScope.ServiceProvider));
+
+        Assert.Equal(PigeonConsumeDecision.AckAndSkip, decision.Decision);
+        Assert.Contains("DuplicateCompleted", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DecisionInterceptor_uses_custom_operation_version_and_message_id_resolvers()
     {
         using var provider = CreateProvider(options =>
@@ -102,6 +123,58 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
         Assert.Equal("message-from-metadata", inbox.Current.EffectiveIdempotencyKey);
         Assert.Equal("orders:2.5.0/billing/resolved-operation", inbox.Current.Entry.Operation);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_uses_direct_message_id_and_context_operation_when_metadata_is_missing()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(
+            scope.ServiceProvider,
+            operation: "context-operation",
+            rawMetadata: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            messageId: "direct-message-id",
+            correlationId: "corr-direct");
+
+        var decision = await interceptor.InterceptAsync(context);
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+
+        Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
+        Assert.Equal("direct-message-id", inbox.Current.EffectiveIdempotencyKey);
+        Assert.Equal("orders:1.2.0/billing/context-operation", inbox.Current.Entry.Operation);
+        Assert.Equal("corr-direct", inbox.Current.Entry.CorrelationId);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_uses_message_type_or_message_fallback_operation_and_null_raw_metadata()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var typedContext = CreateContext(
+            scope.ServiceProvider,
+            messageId: "typed-message-id",
+            useNullRawMetadata: true);
+        var fallbackContext = CreateContext(
+            scope.ServiceProvider,
+            useDefaultMessage: false,
+            message: null,
+            messageType: null,
+            operation: null,
+            messageId: "fallback-message-id",
+            useNullRawMetadata: true);
+
+        await interceptor.InterceptAsync(typedContext);
+        var typedOperation = scope.ServiceProvider.GetRequiredService<IInboxService>().Current.Entry.Operation;
+        scope.ServiceProvider.GetRequiredService<IInboxService>().ReleaseCurrent();
+
+        await interceptor.InterceptAsync(fallbackContext);
+        var fallbackOperation = scope.ServiceProvider.GetRequiredService<IInboxService>().Current.Entry.Operation;
+
+        Assert.Equal("orders:1.2.0/billing/OrderMessage", typedOperation);
+        Assert.Equal("orders:1.2.0/billing/message", fallbackOperation);
     }
 
     [Fact]
@@ -204,6 +277,72 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal("boom", entry.FailureDetails.ErrorMessage);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecutionInterceptor_does_not_finalize_a_replaced_context(bool handlerFails)
+    {
+        var inbox = Substitute.For<IInboxService>();
+        var first = new InboxContext(new InboxEntry(), "first", ownsCompletion: true);
+        var replacement = new InboxContext(new InboxEntry(), "replacement", ownsCompletion: true);
+        inbox.Current.Returns(first, replacement);
+        var execution = new SquirrelBoxPigeonExecutionInterceptor(inbox);
+        var context = new ConsumeContext();
+
+        if (handlerFails)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => execution.InvokeAsync(
+                context,
+                (_, _) => throw new InvalidOperationException("boom")).AsTask());
+        }
+        else
+        {
+            await execution.InvokeAsync(context, (_, _) => ValueTask.CompletedTask);
+        }
+
+        await inbox.DidNotReceive().CompleteCurrentAsync(
+            Arg.Any<InboxCompletion>(),
+            Arg.Any<CancellationToken>());
+        await inbox.DidNotReceive().FailCurrentAsync(
+            Arg.Any<Exception>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ExecutionInterceptor_skips_missing_or_non_owning_contexts(
+        bool hasContext,
+        bool handlerFails)
+    {
+        var inbox = Substitute.For<IInboxService>();
+        inbox.Current.Returns(hasContext
+            ? new InboxContext(new InboxEntry(), "observer", ownsCompletion: false)
+            : null);
+        var execution = new SquirrelBoxPigeonExecutionInterceptor(inbox);
+        var context = new ConsumeContext();
+
+        if (handlerFails)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => execution.InvokeAsync(
+                context,
+                (_, _) => throw new InvalidOperationException("boom")).AsTask());
+        }
+        else
+        {
+            await execution.InvokeAsync(context, (_, _) => ValueTask.CompletedTask);
+        }
+
+        await inbox.DidNotReceive().CompleteCurrentAsync(
+            Arg.Any<InboxCompletion>(),
+            Arg.Any<CancellationToken>());
+        await inbox.DidNotReceive().FailCurrentAsync(
+            Arg.Any<Exception>(),
+            Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task DecisionInterceptor_defers_consume_and_schedules_pigeon_envelope()
     {
@@ -290,6 +429,82 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(inbox.Current.Entry.LastAttemptId, replyMetadata.AttemptId);
         Assert.Equal(inbox.Current.Entry.LastTraceId, replyMetadata.TraceId);
         AssertNoFlatIdentityMetadata(context.ReplyMetadata);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_uses_last_context_metadata_during_deferred_replay_when_current_is_released()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        await inbox.OpenOrContinueAsync(InboxOpenRequest.For("pigeon", "orders", "pigeon-key", new OrderMessage("order-1")));
+        inbox.ReleaseCurrent();
+
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(scope.ServiceProvider, ConsumeExecutionSource.DeferredReplay);
+
+        var result = await interceptor.InterceptAsync(context);
+
+        Assert.Equal(PigeonConsumeDecision.Continue, result.Decision);
+        var replyMetadata = ReadSquirrelBoxMetadata(context.ReplyMetadata);
+        Assert.Equal("pigeon-key", replyMetadata.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_deferred_replay_without_an_inbox_context_writes_no_metadata()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var context = CreateContext(scope.ServiceProvider, ConsumeExecutionSource.DeferredReplay);
+
+        var result = await interceptor.InterceptAsync(context);
+
+        Assert.Equal(PigeonConsumeDecision.Continue, result.Decision);
+        Assert.Empty(context.ReplyMetadata);
+        Assert.Empty(context.ReplyHeaders);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_maps_decision_with_last_context_metadata()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        await inbox.OpenOrContinueAsync(InboxOpenRequest.For("pigeon", "orders", "last-key", new OrderMessage("one")));
+        inbox.ReleaseCurrent();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var method = typeof(SquirrelBoxPigeonDecisionInterceptor).GetMethod(
+            "MapDecision",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        var result = (PigeonConsumeDecisionResult)method.Invoke(
+            interceptor,
+            [new InboxDecision(InboxOpenState.DuplicateCompleted, InboxPolicyAction.Replay, inbox.LastContext.Entry)])!;
+
+        Assert.Equal("last-key", ReadSquirrelBoxMetadata(result.Metadata).IdempotencyKey);
+    }
+
+    [Fact]
+    public void DecisionInterceptor_with_version_creates_empty_header_and_metadata_dictionaries()
+    {
+        var method = typeof(SquirrelBoxPigeonDecisionInterceptor).GetMethod(
+            "WithVersion",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(SquirrelBoxPigeonDecisionInterceptor), "WithVersion");
+        var envelope = new PigeonConsumeEnvelope
+        {
+            Topic = "orders",
+            Headers = null,
+            Metadata = null
+        };
+
+        var cloned = (PigeonConsumeEnvelope)method.Invoke(null, [envelope, SemanticVersion.Parse("3.0.0")]);
+
+        Assert.Equal(SemanticVersion.Parse("3.0.0"), cloned.Version);
+        Assert.Empty(cloned.Headers);
+        Assert.Empty(cloned.Metadata);
+        Assert.Throws<TargetInvocationException>(() => method.Invoke(null, [null, SemanticVersion.Default]));
     }
 
     [Fact]
@@ -424,7 +639,10 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Type messageType = null,
         string operation = null,
         IReadOnlyDictionary<string, string> rawMetadata = null,
-        bool useDefaultMessage = true)
+        bool useDefaultMessage = true,
+        string messageId = null,
+        string correlationId = null,
+        bool useNullRawMetadata = false)
         => new()
         {
             Services = services,
@@ -434,8 +652,10 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             Message = useDefaultMessage ? message ?? new OrderMessage("order-1") : message,
             MessageType = useDefaultMessage ? messageType ?? typeof(OrderMessage) : messageType,
             Operation = operation,
+            MessageId = messageId,
+            CorrelationId = correlationId,
             ExecutionSource = executionSource,
-            RawMetadata = rawMetadata ?? CreateRawMetadata("pigeon-key")
+            RawMetadata = useNullRawMetadata ? null : rawMetadata ?? CreateRawMetadata("pigeon-key")
         };
 
     private sealed record OrderMessage(string Id);
