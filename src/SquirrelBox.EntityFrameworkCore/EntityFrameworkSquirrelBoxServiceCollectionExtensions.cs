@@ -82,6 +82,7 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
             new EntityFrameworkOutboxStore<TDbContext>(
                 provider.GetRequiredService<ISquirrelBoxDbContextFactory<TDbContext>>()));
         services.AddScoped<IOutboxStore>(provider => provider.GetRequiredService<EntityFrameworkOutboxStore<TDbContext>>());
+        services.AddScoped<IOutboxAttemptDiagnosticsStore>(provider => provider.GetRequiredService<EntityFrameworkOutboxStore<TDbContext>>());
     }
 
     private static void AddEntityFramework<TDbContext>(IServiceCollection services)

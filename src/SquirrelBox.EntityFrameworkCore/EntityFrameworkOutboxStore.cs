@@ -7,7 +7,7 @@ namespace SquirrelBox.EntityFrameworkCore;
 /// Entity Framework Core implementation of <see cref="IOutboxStore"/>.
 /// </summary>
 /// <typeparam name="TDbContext">The DbContext type used to persist outbox envelopes.</typeparam>
-public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
+public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore, IOutboxAttemptDiagnosticsStore
     where TDbContext : DbContext
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -59,6 +59,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         record.Status = OutboxStatus.Publishing.ToString();
         record.PublishingOnUtc = publishingOnUtc;
         record.UpdatedOnUtc = publishingOnUtc;
+        dbContext.Set<SquirrelBoxOutboxAttemptRecord>().Add(CreateAttemptRecord(record, publishingOnUtc));
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
@@ -73,6 +74,13 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         record.Status = OutboxStatus.Published.ToString();
         record.PublishedOnUtc = publishedOnUtc;
         record.UpdatedOnUtc = publishedOnUtc;
+        await CompleteLatestAttemptAsync(
+            dbContext,
+            record,
+            OutboxAttemptState.Published,
+            publishedOnUtc,
+            failure: null,
+            cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
@@ -91,6 +99,13 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         record.FailureJson = Serialize(failure);
         record.NextAttemptOnUtc = nextAttemptOnUtc;
         record.UpdatedOnUtc = failedOnUtc;
+        await CompleteLatestAttemptAsync(
+            dbContext,
+            record,
+            OutboxAttemptState.Failed,
+            failedOnUtc,
+            failure,
+            cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
@@ -104,6 +119,13 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         var record = await FindByIdAsync(dbContext, envelopeId, cancellationToken);
         record.Status = OutboxStatus.Discarded.ToString();
         record.UpdatedOnUtc = discardedOnUtc;
+        await CompleteLatestAttemptAsync(
+            dbContext,
+            record,
+            OutboxAttemptState.Discarded,
+            discardedOnUtc,
+            failure: null,
+            cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
@@ -140,6 +162,36 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         return result.Select(ToEnvelope).ToArray();
     }
 
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<OutboxAttempt>> QueryAttemptsAsync(
+        OutboxAttemptQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        query ??= new OutboxAttemptQuery();
+
+        await using var dbContext = _dbContextFactory.CreateDbContext();
+        var records = dbContext.Set<SquirrelBoxOutboxAttemptRecord>().AsNoTracking().AsQueryable();
+
+        if (query.OutboxEnvelopeId is { } envelopeId)
+            records = records.Where(record => record.OutboxEnvelopeId == envelopeId);
+
+        if (query.State is { } state)
+        {
+            var stateName = state.ToString();
+            records = records.Where(record => record.State == stateName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.TraceId))
+            records = records.Where(record => record.TraceId == query.TraceId);
+
+        var result = await records
+            .OrderByDescending(record => record.StartedOnUtc)
+            .Take(Math.Max(1, query.Limit))
+            .ToArrayAsync(cancellationToken);
+
+        return result.Select(ToAttempt).ToArray();
+    }
+
     private static async Task<SquirrelBoxOutboxEnvelopeRecord> FindByIdAsync(
         TDbContext dbContext,
         Ulid envelopeId,
@@ -172,6 +224,54 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
             FailureJson = Serialize(envelope.Failure)
         };
 
+    private static SquirrelBoxOutboxAttemptRecord CreateAttemptRecord(
+        SquirrelBoxOutboxEnvelopeRecord envelope,
+        DateTimeOffset startedOnUtc)
+    {
+        var id = Ulid.NewUlid();
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["transport"] = envelope.Transport,
+            ["operation"] = envelope.Operation,
+            ["destination"] = envelope.Destination
+        };
+
+        return new SquirrelBoxOutboxAttemptRecord
+        {
+            Id = id,
+            OutboxEnvelopeId = envelope.Id,
+            AttemptId = id.ToString(),
+            TraceId = envelope.TraceId,
+            State = OutboxAttemptState.Publishing.ToString(),
+            StartedOnUtc = startedOnUtc,
+            MetadataJson = Serialize(metadata)
+        };
+    }
+
+    private static async Task CompleteLatestAttemptAsync(
+        TDbContext dbContext,
+        SquirrelBoxOutboxEnvelopeRecord envelope,
+        OutboxAttemptState state,
+        DateTimeOffset completedOnUtc,
+        OutboxFailure failure,
+        CancellationToken cancellationToken)
+    {
+        var attempt = await dbContext.Set<SquirrelBoxOutboxAttemptRecord>()
+            .Where(record => record.OutboxEnvelopeId == envelope.Id && record.CompletedOnUtc == null)
+            .OrderByDescending(record => record.StartedOnUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (attempt is null)
+        {
+            attempt = CreateAttemptRecord(envelope, completedOnUtc);
+            dbContext.Set<SquirrelBoxOutboxAttemptRecord>().Add(attempt);
+        }
+
+        attempt.State = state.ToString();
+        attempt.CompletedOnUtc = completedOnUtc;
+        attempt.FailureJson = Serialize(failure);
+    }
+
     private static OutboxEnvelope ToEnvelope(SquirrelBoxOutboxEnvelopeRecord record)
     {
         var envelope = new OutboxEnvelope
@@ -203,6 +303,20 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
 
         return envelope;
     }
+
+    private static OutboxAttempt ToAttempt(SquirrelBoxOutboxAttemptRecord record)
+        => new()
+        {
+            Id = record.Id,
+            OutboxEnvelopeId = record.OutboxEnvelopeId,
+            AttemptId = record.AttemptId,
+            TraceId = record.TraceId,
+            State = Enum.Parse<OutboxAttemptState>(record.State),
+            StartedOnUtc = record.StartedOnUtc,
+            CompletedOnUtc = record.CompletedOnUtc,
+            Failure = Deserialize<OutboxFailure>(record.FailureJson),
+            Metadata = Deserialize<Dictionary<string, string>>(record.MetadataJson) ?? new(StringComparer.OrdinalIgnoreCase)
+        };
 
     private static string Serialize<T>(T value)
         => value is null ? null : JsonSerializer.Serialize(value, JsonOptions);

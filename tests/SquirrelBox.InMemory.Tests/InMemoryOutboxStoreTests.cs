@@ -41,6 +41,54 @@ public sealed class InMemoryOutboxStoreTests
         Assert.Equal("failed", stored.Failure.Details);
     }
 
+    [Fact]
+    public async Task Publish_lifecycle_records_outbox_attempt()
+    {
+        var store = new InMemoryOutboxStore();
+        var envelope = CreateEnvelope("pigeon", OutboxStatus.Pending);
+        envelope.TraceId = "trace-1";
+        await store.AddAsync(envelope);
+
+        var started = DateTimeOffset.UtcNow;
+        var completed = started.AddSeconds(1);
+        await store.MarkPublishingAsync(envelope.Id, started);
+        await store.MarkPublishedAsync(envelope.Id, completed);
+
+        var attempt = Assert.Single(await store.QueryAttemptsAsync(new OutboxAttemptQuery
+        {
+            OutboxEnvelopeId = envelope.Id
+        }));
+
+        Assert.Equal(OutboxAttemptState.Published, attempt.State);
+        Assert.Equal("trace-1", attempt.TraceId);
+        Assert.Equal(started, attempt.StartedOnUtc);
+        Assert.Equal(completed, attempt.CompletedOnUtc);
+        Assert.Equal("pigeon", attempt.Metadata["transport"]);
+    }
+
+    [Fact]
+    public async Task Failed_publish_records_outbox_attempt_failure()
+    {
+        var store = new InMemoryOutboxStore();
+        var envelope = CreateEnvelope("pigeon", OutboxStatus.Pending);
+        await store.AddAsync(envelope);
+
+        await store.MarkPublishingAsync(envelope.Id, DateTimeOffset.UtcNow);
+        await store.MarkFailedAsync(
+            envelope.Id,
+            new OutboxFailure { Details = "broker down" },
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddSeconds(30));
+
+        var attempt = Assert.Single(await store.QueryAttemptsAsync(new OutboxAttemptQuery
+        {
+            State = OutboxAttemptState.Failed
+        }));
+
+        Assert.Equal(envelope.Id, attempt.OutboxEnvelopeId);
+        Assert.Equal("broker down", attempt.Failure.Details);
+    }
+
     private static OutboxEnvelope CreateEnvelope(string transport, OutboxStatus status)
         => new()
         {

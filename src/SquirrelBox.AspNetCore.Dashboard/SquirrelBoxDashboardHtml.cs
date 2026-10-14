@@ -75,6 +75,7 @@ internal static class SquirrelBoxDashboardHtml
       <nav class="nav">
         <button class="active" data-tab="inbox">Inbox</button>
         <button data-tab="outbox">Outbox</button>
+        <button data-tab="attempts">Outbox Attempts</button>
         <button data-tab="deferred">Deferred</button>
         <button data-tab="events">Events</button>
       </nav>
@@ -90,12 +91,13 @@ internal static class SquirrelBoxDashboardHtml
       <div class="toolbar"><input id="search" placeholder="Search id, operation, status, correlation" /><select id="status"><option value="">All statuses</option></select></div>
       <section id="inbox" class="panel active"><div class="tablewrap"><table><thead><tr><th>Status</th><th>Source</th><th>Operation</th><th>Key</th><th>Mode</th><th>Correlation</th><th>Created</th></tr></thead><tbody id="inboxRows"></tbody></table></div></section>
       <section id="outbox" class="panel"><div class="tablewrap"><table><thead><tr><th>Status</th><th>Transport</th><th>Operation</th><th>Destination</th><th>Attempts</th><th>Correlation</th><th>Updated</th></tr></thead><tbody id="outboxRows"></tbody></table></div></section>
+      <section id="attempts" class="panel"><div class="tablewrap"><table><thead><tr><th>Status</th><th>Envelope</th><th>Attempt</th><th>Trace</th><th>Started</th><th>Completed</th><th>Failure</th></tr></thead><tbody id="attemptRows"></tbody></table></div></section>
       <section id="deferred" class="panel"><div class="events" id="deferredRows"></div></section>
       <section id="events" class="panel"><div class="events" id="eventRows"></div></section>
     </main>
   </div>
   <script>
-    const state = { inbox: [], outbox: [], events: [], tab: 'inbox' };
+    const state = { inbox: [], outbox: [], outboxAttempts: [], events: [], tab: 'inbox' };
     const $ = id => document.getElementById(id);
     const fmt = value => value ? new Date(value).toLocaleString() : '';
     const pill = value => `<span class="pill ${value}">${value}</span>`;
@@ -109,14 +111,15 @@ internal static class SquirrelBoxDashboardHtml
     function render() {
       $('inboxCount').textContent = state.inbox.length;
       $('outboxCount').textContent = state.outbox.length;
-      $('failedCount').textContent = state.inbox.filter(x=>x.status==='Failed').length + state.outbox.filter(x=>x.status==='Failed').length;
+      $('failedCount').textContent = state.inbox.filter(x=>x.status==='Failed').length + state.outbox.filter(x=>x.status==='Failed').length + state.outboxAttempts.filter(x=>x.status==='Failed').length;
       $('eventCount').textContent = state.events.length;
       $('inboxRows').innerHTML = state.inbox.filter(matches).map(x => `<tr><td>${pill(x.status)}</td><td>${text(x.source)}</td><td>${text(x.operation)}</td><td>${text(x.idempotencyKey)}</td><td>${text(x.executionMode)}</td><td>${text(x.correlationId)}</td><td>${fmt(x.createdOnUtc)}</td></tr>`).join('');
       $('outboxRows').innerHTML = state.outbox.filter(matches).map(x => `<tr><td>${pill(x.status)}</td><td>${text(x.transport)}</td><td>${text(x.operation)}</td><td>${text(x.destination)}</td><td>${x.attempts}</td><td>${text(x.correlationId)}</td><td>${fmt(x.updatedOnUtc)}</td></tr>`).join('');
+      $('attemptRows').innerHTML = state.outboxAttempts.filter(matches).map(x => `<tr><td>${pill(x.status)}</td><td>${text(x.outboxEnvelopeId)}</td><td>${text(x.attemptId)}</td><td>${text(x.traceId)}</td><td>${fmt(x.startedOnUtc)}</td><td>${fmt(x.completedOnUtc)}</td><td>${text(x.failure)}</td></tr>`).join('');
       const deferred = state.events.filter(x => x.category === 'Deferred').filter(matches);
       $('deferredRows').innerHTML = deferred.map(eventCard).join('');
       $('eventRows').innerHTML = state.events.filter(matches).slice().reverse().map(eventCard).join('');
-      const statuses = new Set([...state.inbox.map(x=>x.status), ...state.outbox.map(x=>x.status), ...state.events.map(x=>x.name)]);
+      const statuses = new Set([...state.inbox.map(x=>x.status), ...state.outbox.map(x=>x.status), ...state.outboxAttempts.map(x=>x.status), ...state.events.map(x=>x.name)]);
       const current = $('status').value;
       $('status').innerHTML = '<option value="">All statuses</option>' + [...statuses].sort().map(x=>`<option ${x===current?'selected':''}>${text(x)}</option>`).join('');
     }
@@ -127,7 +130,7 @@ internal static class SquirrelBoxDashboardHtml
     }));
     $('search').addEventListener('input', render); $('status').addEventListener('change', render);
     const dashboardPath = location.pathname.replace(/\/$/, '');
-    fetch(`${dashboardPath}/api/state`).then(r => r.json()).then(data => { state.inbox=data.inbox||[]; state.outbox=data.outbox||[]; state.events=data.events||[]; render(); });
+    fetch(`${dashboardPath}/api/state`).then(r => r.json()).then(data => { state.inbox=data.inbox||[]; state.outbox=data.outbox||[]; state.outboxAttempts=data.outboxAttempts||[]; state.events=data.events||[]; render(); });
     const stream = new EventSource(`${dashboardPath}/events/stream`);
     stream.addEventListener('squirrelbox', e => { state.events.push(JSON.parse(e.data)); state.events = state.events.slice(-300); render(); });
     stream.onerror = () => $('liveText').textContent = 'Reconnecting';

@@ -43,6 +43,13 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
 
         Assert.Equal(OutboxStatus.Published, stored.Status);
         Assert.Equal(envelopeId, publisher.Published.Single().Id);
+
+        var attempt = Assert.Single(await verifyScope.ServiceProvider
+            .GetRequiredService<IOutboxAttemptDiagnosticsStore>()
+            .QueryAttemptsAsync(new OutboxAttemptQuery { OutboxEnvelopeId = envelopeId }));
+        Assert.Equal(OutboxAttemptState.Published, attempt.State);
+        Assert.Equal(envelopeId, attempt.OutboxEnvelopeId);
+        Assert.NotNull(attempt.CompletedOnUtc);
     }
 
     [Fact]
@@ -84,10 +91,49 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
         Assert.Single(outboxEntries);
     }
 
-    private static ServiceProvider CreateProvider(string connectionString)
+    [Fact]
+    public async Task SqlServer_outbox_records_failed_publish_attempt()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString, publisherSucceeds: false);
+        await EnsureDatabaseAsync(provider);
+
+        Ulid envelopeId;
+        using (var scope = provider.CreateScope())
+        {
+            var envelope = await scope.ServiceProvider.GetRequiredService<IOutboxService>()
+                .EnqueueAsync(new OutboxEnqueueRequest
+                {
+                    Transport = "test",
+                    Operation = "orders.created",
+                    Destination = "orders",
+                    Payload = new TestPayload("order-failed"),
+                    TraceId = "trace-failed"
+                });
+            envelopeId = envelope.Id;
+        }
+
+        using (var publishScope = provider.CreateScope())
+        {
+            var result = await publishScope.ServiceProvider.GetRequiredService<IOutboxService>()
+                .PublishAsync(envelopeId);
+            Assert.False(result.Succeeded);
+        }
+
+        using var verifyScope = provider.CreateScope();
+        var attempt = Assert.Single(await verifyScope.ServiceProvider
+            .GetRequiredService<IOutboxAttemptDiagnosticsStore>()
+            .QueryAttemptsAsync(new OutboxAttemptQuery { State = OutboxAttemptState.Failed }));
+
+        Assert.Equal(envelopeId, attempt.OutboxEnvelopeId);
+        Assert.Equal("trace-failed", attempt.TraceId);
+        Assert.Equal("publisher rejected", attempt.Failure.Details);
+    }
+
+    private static ServiceProvider CreateProvider(string connectionString, bool publisherSucceeds = true)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<TestOutboxPublisher>();
+        services.AddSingleton(new TestOutboxPublisher(publisherSucceeds));
         services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
         services.AddDbContext<TestSquirrelBoxDbContext>(options => options.UseSqlServer(connectionString));
         services
@@ -121,6 +167,13 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
 
     private sealed class TestOutboxPublisher : IOutboxTransportPublisher
     {
+        private readonly bool _succeeds;
+
+        public TestOutboxPublisher(bool succeeds)
+        {
+            _succeeds = succeeds;
+        }
+
         public string Transport => "test";
 
         public IList<OutboxEnvelope> Published { get; } = [];
@@ -130,7 +183,9 @@ public sealed class EntityFrameworkOutboxStoreE2ETests
             CancellationToken cancellationToken = default)
         {
             Published.Add(envelope);
-            return ValueTask.FromResult(OutboxPublishResult.Success);
+            return ValueTask.FromResult(_succeeds
+                ? OutboxPublishResult.Success
+                : OutboxPublishResult.Failed(new OutboxFailure { Details = "publisher rejected" }));
         }
     }
 

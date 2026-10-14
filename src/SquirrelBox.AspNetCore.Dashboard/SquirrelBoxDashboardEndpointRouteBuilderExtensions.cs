@@ -116,6 +116,7 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
         var limit = Math.Max(1, options.RecentLimit);
         var inboxStore = context.RequestServices.GetService<IInboxDiagnosticsStore>();
         var outboxStore = context.RequestServices.GetService<IOutboxStore>();
+        var outboxAttemptStore = context.RequestServices.GetService<IOutboxAttemptDiagnosticsStore>();
         var sink = context.RequestServices.GetRequiredService<ISquirrelBoxEventSink>();
 
         var inbox = inboxStore is null
@@ -130,10 +131,17 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
                 .Select(ToOutboxItem)
                 .ToArray();
 
+        var outboxAttempts = outboxAttemptStore is null
+            ? []
+            : (await outboxAttemptStore.QueryAttemptsAsync(new OutboxAttemptQuery { Limit = limit }, context.RequestAborted))
+                .Select(ToOutboxAttemptItem)
+                .ToArray();
+
         return Json(new
         {
             inbox,
             outbox,
+            outboxAttempts,
             events = sink.GetRecent(limit)
         });
     }
@@ -357,6 +365,20 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
             envelope.Attempts,
             failure = envelope.Failure?.Details,
             metadata = envelope.Metadata
+        };
+
+    private static object ToOutboxAttemptItem(OutboxAttempt attempt)
+        => new
+        {
+            id = attempt.Id.ToString(),
+            outboxEnvelopeId = attempt.OutboxEnvelopeId.ToString(),
+            attempt.AttemptId,
+            attempt.TraceId,
+            status = attempt.State.ToString(),
+            attempt.StartedOnUtc,
+            attempt.CompletedOnUtc,
+            failure = attempt.Failure?.Details,
+            metadata = attempt.Metadata
         };
 
     private static void ValidateDashboardConfiguration(IServiceProvider services)
