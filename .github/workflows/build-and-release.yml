@@ -90,7 +90,21 @@ jobs:
         run: dotnet build "$DOTNET_TARGET" --no-restore --configuration "$CONFIGURATION"
 
       - name: Test
-        run: dotnet test "$DOTNET_TARGET" --no-build --configuration "$CONFIGURATION" --verbosity normal
+        run: >
+          dotnet test "$DOTNET_TARGET"
+          --no-build
+          --configuration "$CONFIGURATION"
+          --verbosity normal
+          --collect:"XPlat Code Coverage"
+          --results-directory ./TestResults
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ./TestResults/**/coverage.cobertura.xml
+          if-no-files-found: warn
 
       - name: Resolve release marker
         id: release
