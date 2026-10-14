@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using SquirrelBox.InMemory;
 
 namespace SquirrelBox.Tests;
@@ -153,11 +154,105 @@ public sealed class OutboxServiceTests
         }).AsTask());
     }
 
-    private static ServiceProvider CreateProvider(bool fail = false, Action<SquirrelBoxOptions> configure = null)
+    [Fact]
+    public async Task EnqueueAsync_schedules_envelope_when_deferred_scheduler_is_registered()
+    {
+        using var provider = CreateProvider(registerScheduler: true);
+        using var scope = provider.CreateScope();
+
+        var envelope = await scope.ServiceProvider.GetRequiredService<IOutboxService>()
+            .EnqueueAsync(new OutboxEnqueueRequest
+            {
+                Transport = "test",
+                Operation = "orders.scheduled",
+                Payload = new TestMessage("scheduled")
+            });
+
+        Assert.Equal(envelope.Id, Assert.Single(provider.GetRequiredService<TestOutboxScheduler>().Scheduled).Id);
+    }
+
+    [Fact]
+    public async Task PublishAsync_preserves_failed_result_without_failure_details()
+    {
+        using var provider = CreateProvider();
+        provider.GetRequiredService<TestOutboxPublisher>().Result = new OutboxPublishResult(false);
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+        var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "test",
+            Operation = "orders.rejected",
+            Payload = new TestMessage("rejected")
+        });
+
+        var result = await outbox.PublishAsync(envelope.Id);
+        var stored = await outbox.GetAsync(envelope.Id);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Failure);
+        Assert.Equal(OutboxStatus.Failed, stored.Status);
+    }
+
+    [Fact]
+    public async Task PublishAsync_fails_when_transport_publisher_is_missing()
+    {
+        using var provider = CreateProvider(registerPublisher: false);
+        using var scope = provider.CreateScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+        var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
+        {
+            Transport = "missing",
+            Operation = "orders.missing",
+            Payload = new TestMessage("missing")
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => outbox.PublishAsync(envelope.Id).AsTask());
+    }
+
+    [Fact]
+    public void Envelope_validation_rejects_empty_serialized_payload()
+    {
+        var method = typeof(DefaultOutboxService).GetMethod(
+            "ValidateEnvelope",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        var envelope = new OutboxEnvelope
+        {
+            Transport = "test",
+            Operation = "orders.empty",
+            PayloadType = typeof(TestMessage).FullName,
+            Payload = []
+        };
+
+        var exception = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, new object[] { envelope }));
+        var missingPayload = new OutboxEnvelope
+        {
+            Transport = "test",
+            Operation = "orders.null",
+            PayloadType = typeof(TestMessage).FullName,
+            Payload = null
+        };
+        var missingException = Assert.Throws<TargetInvocationException>(() =>
+            method.Invoke(null, new object[] { missingPayload }));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+        Assert.IsType<InvalidOperationException>(missingException.InnerException);
+    }
+
+    private static ServiceProvider CreateProvider(
+        bool fail = false,
+        Action<SquirrelBoxOptions> configure = null,
+        bool registerScheduler = false,
+        bool registerPublisher = true)
     {
         var services = new ServiceCollection();
         services.AddSingleton(new TestOutboxPublisher(fail));
-        services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
+        if (registerPublisher)
+            services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<TestOutboxPublisher>());
+        if (registerScheduler)
+        {
+            services.AddSingleton<TestOutboxScheduler>();
+            services.AddSingleton<IOutboxDeferredScheduler>(provider => provider.GetRequiredService<TestOutboxScheduler>());
+        }
         services.AddSquirrelBox(configure).UseInMemory();
         return services.BuildServiceProvider();
     }
@@ -194,6 +289,8 @@ public sealed class OutboxServiceTests
 
         public string Transport => "test";
 
+        public OutboxPublishResult Result { get; set; } = OutboxPublishResult.Success;
+
         public IList<OutboxEnvelope> Published { get; } = [];
 
         public ValueTask<OutboxPublishResult> PublishAsync(
@@ -204,7 +301,20 @@ public sealed class OutboxServiceTests
                 throw new InvalidOperationException("planned publisher failure");
 
             Published.Add(envelope);
-            return ValueTask.FromResult(OutboxPublishResult.Success);
+            return ValueTask.FromResult(Result);
+        }
+    }
+
+    private sealed class TestOutboxScheduler : IOutboxDeferredScheduler
+    {
+        public IList<OutboxEnvelope> Scheduled { get; } = [];
+
+        public ValueTask ScheduleAsync(
+            OutboxEnvelope envelope,
+            CancellationToken cancellationToken = default)
+        {
+            Scheduled.Add(envelope);
+            return ValueTask.CompletedTask;
         }
     }
 }
