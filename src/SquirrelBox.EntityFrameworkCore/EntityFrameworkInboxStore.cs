@@ -36,7 +36,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var record = ToRecord(entry);
         SquirrelBoxInboxAttemptRecord attemptRecord = null;
         dbContext.Set<SquirrelBoxInboxEntryRecord>().Add(record);
@@ -72,7 +72,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadHash);
 
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, entryId, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(record.PayloadHash))
@@ -95,7 +95,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         DateTimeOffset completedOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, entryId, cancellationToken);
         record.Status = InboxStatus.Completed.ToString();
         record.CompletionJson = Serialize(completion ?? InboxCompletion.Empty);
@@ -111,7 +111,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         DateTimeOffset failedOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, entryId, cancellationToken);
 
         record.Status = InboxStatus.Failed.ToString();
@@ -129,7 +129,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         DateTimeOffset retryingOnUtc,
         CancellationToken cancellationToken = default)
     {
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var record = await FindByIdAsync(dbContext, entryId, cancellationToken);
 
         record.Status = InboxStatus.Retrying.ToString();
@@ -143,7 +143,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     /// <inheritdoc />
     public async ValueTask<InboxEntry> GetAsync(Ulid entryId, CancellationToken cancellationToken = default)
     {
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         return ToEntry(await FindByIdAsync(dbContext, entryId, cancellationToken));
     }
 
@@ -154,7 +154,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     {
         query ??= new InboxQuery();
 
-        await using var dbContext = _dbContextFactory.CreateDbContext();
+        using var dbContext = _dbContextFactory.CreateDbContext();
         var records = dbContext.Set<SquirrelBoxInboxEntryRecord>().AsNoTracking().AsQueryable();
 
         if (query.Status is { } status)
