@@ -1,8 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using SquirrelBox.AspNetCore.Dashboard;
@@ -44,6 +47,7 @@ public sealed class SquirrelBoxDashboardTests
         Assert.NotNull(state);
         Assert.Single(state.Inbox);
         Assert.Single(state.Outbox);
+        Assert.Single(state.OutboxAttempts);
         Assert.NotEmpty(state.Events);
     }
 
@@ -91,6 +95,33 @@ public sealed class SquirrelBoxDashboardTests
     }
 
     [Fact]
+    public async Task Dashboard_rejects_unknown_root_username()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var login = await client.PostAsJsonAsync("/squirrelbox/auth/login", new
+        {
+            username = "other",
+            password = "secret"
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, login.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dashboard_ignores_corrupt_auth_cookie()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+        client.DefaultRequestHeaders.Add("Cookie", "SquirrelBoxDashboard=not-protected");
+
+        var response = await client.GetAsync("/squirrelbox/api/state");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Dashboard_accepts_form_login_and_logout_clears_cookie()
     {
         using var server = CreateServer();
@@ -124,6 +155,41 @@ public sealed class SquirrelBoxDashboardTests
     }
 
     [Fact]
+    public async Task Dashboard_event_stream_pushes_events_for_authenticated_user()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+        await SignInAsync(client);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var responseTask = client.GetAsync(
+            "/squirrelbox/events/stream",
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellation.Token);
+        await Task.Delay(100, cancellation.Token);
+
+        await server.Services.GetRequiredService<ISquirrelBoxEventPublisher>()
+            .PublishAsync(new SquirrelBoxEvent
+            {
+                Name = "dashboard-test",
+                Category = "Tests",
+                SubjectId = "subject-1",
+                Status = "Ok",
+                OccurredOnUtc = DateTimeOffset.UtcNow
+            }, cancellation.Token);
+
+        var response = await responseTask;
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellation.Token);
+        using var reader = new StreamReader(stream);
+        var first = await reader.ReadLineAsync(cancellation.Token);
+        var second = await reader.ReadLineAsync(cancellation.Token);
+
+        Assert.Equal("event: squirrelbox", first);
+        Assert.Contains("dashboard-test", second);
+    }
+
+    [Fact]
     public async Task Dashboard_uses_aspnet_core_authenticated_principal()
     {
         using var server = CreateAspNetCoreAuthServer();
@@ -140,6 +206,17 @@ public sealed class SquirrelBoxDashboardTests
         Assert.Contains("SquirrelBox", page);
         Assert.Equal(HttpStatusCode.BadRequest, login.StatusCode);
         Assert.NotNull(state);
+    }
+
+    [Fact]
+    public async Task Dashboard_aspnet_core_auth_returns_unauthorized_when_principal_is_missing()
+    {
+        using var server = CreateAspNetCoreAuthServer(authenticated: false);
+        using var client = server.CreateClient();
+
+        var response = await client.GetAsync("/squirrelbox");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -161,6 +238,38 @@ public sealed class SquirrelBoxDashboardTests
 
         Assert.Contains("SquirrelBox", pageBeforeLogin);
         Assert.Contains("SquirrelBox", pageAfterLogin);
+    }
+
+    [Fact]
+    public async Task Dashboard_custom_authenticator_can_reject_page_access()
+    {
+        using var server = CreateCustomAuthServer(succeed: false);
+        using var client = server.CreateClient();
+
+        var page = await client.GetStringAsync("/squirrelbox");
+        var state = await client.GetAsync("/squirrelbox/api/state");
+
+        Assert.Contains("SquirrelBox", page);
+        Assert.Equal(HttpStatusCode.Unauthorized, state.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dashboard_accepts_root_password_hash_configuration()
+    {
+        using var server = CreateServer(options =>
+        {
+            options.Authentication.RootUser.Password = null;
+            options.Authentication.RootUser.PasswordHash = ComputeHash("secret");
+        });
+        using var client = server.CreateClient();
+
+        var login = await client.PostAsJsonAsync("/squirrelbox/auth/login", new
+        {
+            username = "admin",
+            password = "secret"
+        });
+
+        login.EnsureSuccessStatusCode();
     }
 
     [Fact]
@@ -202,7 +311,23 @@ public sealed class SquirrelBoxDashboardTests
         Assert.Throws<InvalidOperationException>(() => new TestServer(builder));
     }
 
-    private static TestServer CreateServer()
+    [Fact]
+    public void Dashboard_user_accessor_reads_current_user_from_http_context_items()
+    {
+        var httpContextAccessor = new HttpContextAccessor();
+        var accessor = new SquirrelBoxDashboardUserAccessor(httpContextAccessor);
+
+        Assert.Null(accessor.Current);
+
+        var context = new DefaultHttpContext();
+        var user = new SquirrelBoxDashboardUser { Username = "admin" };
+        context.Items["__SquirrelBoxDashboardUser"] = user;
+        httpContextAccessor.HttpContext = context;
+
+        Assert.Same(user, accessor.Current);
+    }
+
+    private static TestServer CreateServer(Action<SquirrelBoxDashboardOptions> configure = null)
     {
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
@@ -213,6 +338,7 @@ public sealed class SquirrelBoxDashboardTests
                 {
                     options.Authentication.RootUser.Username = "admin";
                     options.Authentication.RootUser.Password = "secret";
+                    configure?.Invoke(options);
                 });
             })
             .Configure(app =>
@@ -224,7 +350,25 @@ public sealed class SquirrelBoxDashboardTests
         return new TestServer(builder);
     }
 
-    private static TestServer CreateAspNetCoreAuthServer()
+    private static async Task SignInAsync(HttpClient client)
+    {
+        var login = await client.PostAsJsonAsync("/squirrelbox/auth/login", new
+        {
+            username = "admin",
+            password = "secret"
+        });
+
+        login.EnsureSuccessStatusCode();
+        client.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie").Single().Split(';')[0]);
+    }
+
+    private static string ComputeHash(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static TestServer CreateAspNetCoreAuthServer(bool authenticated = true)
     {
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
@@ -239,11 +383,15 @@ public sealed class SquirrelBoxDashboardTests
                 app.UseRouting();
                 app.Use(async (context, next) =>
                 {
-                    context.User = new ClaimsPrincipal(new ClaimsIdentity(
-                    [
-                        new Claim(ClaimTypes.Name, "admin"),
-                        new Claim(ClaimTypes.Role, "operators")
-                    ], "test"));
+                    if (authenticated)
+                    {
+                        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [
+                            new Claim(ClaimTypes.Name, "admin"),
+                            new Claim(ClaimTypes.Role, "operators")
+                        ], "test"));
+                    }
+
                     await next();
                 });
                 app.UseEndpoints(endpoints => endpoints.MapSquirrelBoxDashboard());
@@ -252,13 +400,13 @@ public sealed class SquirrelBoxDashboardTests
         return new TestServer(builder);
     }
 
-    private static TestServer CreateCustomAuthServer()
+    private static TestServer CreateCustomAuthServer(bool succeed = true)
     {
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
             {
                 services.AddRouting();
-                services.AddSingleton<ISquirrelBoxDashboardAuthenticator, TestDashboardAuthenticator>();
+                services.AddSingleton<ISquirrelBoxDashboardAuthenticator>(new TestDashboardAuthenticator(succeed));
                 services.AddSquirrelBox().UseInMemory();
                 services.AddSquirrelBoxDashboard(options =>
                     options.Authentication.Mode = SquirrelBoxDashboardAuthenticationMode.Custom);
@@ -293,6 +441,11 @@ public sealed class SquirrelBoxDashboardTests
                 Payload = new OrderRequest("order-1"),
                 CorrelationId = "trace-1"
             });
+
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxStore>();
+        var envelope = (await outbox.QueryAsync(new OutboxQuery { Limit = 1 })).Single();
+        await outbox.MarkPublishingAsync(envelope.Id, DateTimeOffset.UtcNow);
+        await outbox.MarkPublishedAsync(envelope.Id, DateTimeOffset.UtcNow.AddSeconds(1));
     }
 
     private sealed record OrderRequest(string Id);
@@ -302,6 +455,8 @@ public sealed class SquirrelBoxDashboardTests
         public DashboardInboxItem[] Inbox { get; set; }
 
         public DashboardOutboxItem[] Outbox { get; set; }
+
+        public DashboardOutboxAttemptItem[] OutboxAttempts { get; set; }
 
         public SquirrelBoxEvent[] Events { get; set; }
     }
@@ -316,12 +471,27 @@ public sealed class SquirrelBoxDashboardTests
         public string Id { get; set; }
     }
 
+    private sealed class DashboardOutboxAttemptItem
+    {
+        public string Id { get; set; }
+    }
+
     private sealed class TestDashboardAuthenticator : ISquirrelBoxDashboardAuthenticator
     {
+        private readonly bool _succeed;
+
+        public TestDashboardAuthenticator(bool succeed = true)
+        {
+            _succeed = succeed;
+        }
+
         public Task<SquirrelBoxDashboardAuthResult> AuthenticateAsync(
             SquirrelBoxDashboardAuthRequest request,
             CancellationToken cancellationToken = default)
         {
+            if (!_succeed)
+                return Task.FromResult(SquirrelBoxDashboardAuthResult.Rejected);
+
             var user = new SquirrelBoxDashboardUser
             {
                 Username = request.Username ?? "operator",

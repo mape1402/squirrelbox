@@ -117,15 +117,52 @@ public sealed class SquirrelBoxMiddlewareE2ETests
         Assert.False(string.IsNullOrWhiteSpace(response.Headers.GetValues("SquirrelBox-Attempt-Id").Single()));
     }
 
-    private static TestServer CreateServer()
+    [Fact]
+    public async Task Middleware_can_be_disabled_by_request_predicate()
+    {
+        using var server = CreateServer(options => options.ShouldHandleRequest = _ => false);
+        using var client = server.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/unmarked-orders");
+        request.Headers.Add("Idempotency-Key", "disabled-key");
+        request.Content = JsonContent.Create(new OrderRequest("disabled"));
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.False(response.Headers.Contains("Idempotency-Key"));
+    }
+
+    [Fact]
+    public async Task Middleware_marks_inline_context_failed_when_endpoint_throws_and_allows_retry()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+        using var first = new HttpRequestMessage(HttpMethod.Post, "/unstable-orders");
+        first.Headers.Add("Idempotency-Key", "unstable-key");
+        first.Content = JsonContent.Create(new OrderRequest("unstable"));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.SendAsync(first));
+
+        using var retry = new HttpRequestMessage(HttpMethod.Post, "/unstable-orders");
+        retry.Headers.Add("Idempotency-Key", "unstable-key");
+        retry.Content = JsonContent.Create(new OrderRequest("unstable"));
+        var retryResponse = await client.SendAsync(retry);
+
+        Assert.Equal(HttpStatusCode.Created, retryResponse.StatusCode);
+        Assert.Equal("unstable-key", retryResponse.Headers.GetValues("Idempotency-Key").Single());
+    }
+
+    private static TestServer CreateServer(Action<SquirrelBoxAspNetCoreOptions> configureAspNetCore = null)
     {
         var unmarkedExecutions = 0;
+        var unstableExecutions = 0;
         var builder = new WebHostBuilder()
             .ConfigureServices(services =>
             {
                 services.AddRouting();
                 services.AddSquirrelBox().UseInMemory();
-                services.AddSquirrelBoxAspNetCore();
+                services.AddSquirrelBoxAspNetCore(configureAspNetCore);
             })
             .Configure(app =>
             {
@@ -163,6 +200,20 @@ public sealed class SquirrelBoxMiddlewareE2ETests
                         context.Response.Headers.ETag = $"\"{request.Id}\"";
                         await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = request.Id }));
                     });
+
+                    endpoints.MapPost("/unstable-orders", async context =>
+                    {
+                        var request = await context.Request.ReadFromJsonAsync<OrderRequest>();
+                        var inbox = context.RequestServices.GetRequiredService<IInboxService>();
+                        await context.OpenSquirrelBoxAsync(inbox, request);
+
+                        if (Interlocked.Increment(ref unstableExecutions) == 1)
+                            throw new InvalidOperationException("unstable endpoint");
+
+                        context.Response.StatusCode = StatusCodes.Status201Created;
+                        await context.Response.WriteAsync("ok");
+                    });
+
                 });
             });
 
