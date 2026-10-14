@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Mule;
@@ -101,6 +102,63 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
         Assert.Equal("message-from-metadata", inbox.Current.EffectiveIdempotencyKey);
         Assert.Equal("orders:2.5.0/billing/resolved-operation", inbox.Current.Entry.Operation);
+    }
+
+    [Fact]
+    public async Task DecisionInterceptor_opens_when_broker_message_id_metadata_is_not_configured()
+    {
+        using var provider = CreateProvider(options => options.MessageIdMetadataName = " ");
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var metadata = CreateRawMetadata("pigeon-key");
+        metadata.Remove("message-id");
+        var context = CreateContext(scope.ServiceProvider, rawMetadata: metadata);
+
+        var decision = await interceptor.InterceptAsync(context);
+
+        Assert.Equal(PigeonConsumeDecision.Continue, decision.Decision);
+        Assert.Equal("pigeon-key", scope.ServiceProvider.GetRequiredService<IInboxService>().Current.EffectiveIdempotencyKey);
+    }
+
+    [Theory]
+    [InlineData(InboxPolicyAction.Skip, PigeonConsumeDecision.AckAndSkip)]
+    [InlineData(InboxPolicyAction.Replay, PigeonConsumeDecision.AckAndSkip)]
+    [InlineData(InboxPolicyAction.Retry, PigeonConsumeDecision.Retry)]
+    [InlineData(InboxPolicyAction.Reopen, PigeonConsumeDecision.Retry)]
+    [InlineData(InboxPolicyAction.Reject, PigeonConsumeDecision.Reject)]
+    [InlineData(InboxPolicyAction.Fail, PigeonConsumeDecision.Reject)]
+    public void DecisionInterceptor_maps_neutral_decisions_to_pigeon_decisions(
+        InboxPolicyAction action,
+        PigeonConsumeDecision expected)
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var method = typeof(SquirrelBoxPigeonDecisionInterceptor).GetMethod("MapDecision", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingMethodException(nameof(SquirrelBoxPigeonDecisionInterceptor), "MapDecision");
+
+        var result = (PigeonConsumeDecisionResult)method.Invoke(
+            interceptor,
+            [new InboxDecision(InboxOpenState.DuplicateInProgress, action, new InboxEntry())]);
+
+        Assert.Equal(expected, result.Decision);
+        Assert.Contains(action.ToString(), result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DecisionInterceptor_maps_unknown_neutral_decision_to_rejected_decision()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var interceptor = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(scope.ServiceProvider);
+        var method = typeof(SquirrelBoxPigeonDecisionInterceptor).GetMethod("MapDecision", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingMethodException(nameof(SquirrelBoxPigeonDecisionInterceptor), "MapDecision");
+
+        var result = (PigeonConsumeDecisionResult)method.Invoke(
+            interceptor,
+            [new InboxDecision(InboxOpenState.DuplicateInProgress, (InboxPolicyAction)999, new InboxEntry())]);
+
+        Assert.Equal(PigeonConsumeDecision.Reject, result.Decision);
     }
 
     [Fact]

@@ -235,9 +235,45 @@ public sealed class InboxMessageServiceE2ETests
             entry.Message.Contains("State=MissingIdempotencyKey", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AttachEffectiveKey_does_nothing_when_no_message_has_opened()
+    {
+        var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        service.AttachEffectiveKey(metadata);
+
+        Assert.Empty(metadata);
+    }
+
+    [Fact]
+    public async Task OpenAsync_can_use_correlation_id_when_key_metadata_is_missing()
+    {
+        var provider = CreateProvider(configureMessaging: options => options.UseCorrelationIdWhenKeyIsMissing = true);
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created",
+            CorrelationId = "corr-as-key",
+            Payload = new OrderMessage("order-correlation")
+        });
+
+        Assert.Equal("corr-as-key", opened.EffectiveIdempotencyKey);
+        Assert.Equal("corr-as-key", opened.EffectiveCorrelationId);
+    }
+
     private static ServiceProvider CreateProvider(
         bool scanProfiles = true,
-        ListLogger<DefaultInboxMessageService> logger = null)
+        ListLogger<DefaultInboxMessageService> logger = null,
+        Action<SquirrelBoxMessagingOptions> configureMessaging = null)
     {
         var services = new ServiceCollection();
         services.AddSquirrelBox().UseInMemory();
@@ -245,6 +281,8 @@ public sealed class InboxMessageServiceE2ETests
         {
             if (scanProfiles)
                 options.ScanAssemblyContaining<InboxMessageServiceE2ETests>();
+
+            configureMessaging?.Invoke(options);
         });
 
         if (logger is not null)
