@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Mule;
@@ -84,6 +85,54 @@ public sealed class OutboxMuleSchedulerTests
         Assert.Contains(host.Services.GetRequiredService<IInMemoryMule>().Actions, action => action.Status == DurableActionStatus.Completed);
     }
 
+    [Fact]
+    public async Task Outbox_mule_action_uses_payload_envelope_id()
+    {
+        var outbox = Substitute.For<IOutboxService>();
+        var envelopeId = Ulid.NewUlid();
+        var action = new SquirrelBoxOutboxMuleAction(outbox);
+
+        await action.ExecuteAsync(
+            CreateMuleContext(new SquirrelBoxOutboxEnvelopeReference { EnvelopeId = envelopeId.ToString() }),
+            CancellationToken.None);
+
+        await outbox.Received(1).PublishAsync(envelopeId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Outbox_mule_action_uses_metadata_envelope_id_when_payload_is_missing()
+    {
+        var outbox = Substitute.For<IOutboxService>();
+        var envelopeId = Ulid.NewUlid();
+        var action = new SquirrelBoxOutboxMuleAction(outbox);
+
+        await action.ExecuteAsync(
+            CreateMuleContext(
+                payload: null,
+                metadata: new Dictionary<string, string>
+                {
+                    [SquirrelBoxMuleMetadata.OutboxEnvelopeId] = envelopeId.ToString()
+                }),
+            CancellationToken.None);
+
+        await outbox.Received(1).PublishAsync(envelopeId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Outbox_mule_action_rejects_missing_or_invalid_envelope_id()
+    {
+        var action = new SquirrelBoxOutboxMuleAction(Substitute.For<IOutboxService>());
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            action.ExecuteAsync(null, CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            action.ExecuteAsync(CreateMuleContext(payload: null), CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            action.ExecuteAsync(
+                CreateMuleContext(new SquirrelBoxOutboxEnvelopeReference { EnvelopeId = "not-a-ulid" }),
+                CancellationToken.None).AsTask());
+    }
+
     private static IHost CreateHost()
         => Host.CreateDefaultBuilder()
             .ConfigureServices(services =>
@@ -104,6 +153,22 @@ public sealed class OutboxMuleSchedulerTests
                     .AddActionsFromAssemblyContaining<SquirrelBoxOutboxMuleAction>());
             })
             .Build();
+
+    private static MuleActionContext<SquirrelBoxOutboxEnvelopeReference> CreateMuleContext(
+        SquirrelBoxOutboxEnvelopeReference payload,
+        IReadOnlyDictionary<string, string> metadata = null)
+    {
+        var action = new DurableAction
+        {
+            Key = SquirrelBoxOutboxMuleActionKeys.PublishKey,
+            Metadata = JsonSerializer.Serialize(metadata ?? new Dictionary<string, string>())
+        };
+
+        return new MuleActionContext<SquirrelBoxOutboxEnvelopeReference>(
+            action,
+            new ServiceCollection().BuildServiceProvider(),
+            payload);
+    }
 
     private sealed record OutboxMessage(string Id);
 
