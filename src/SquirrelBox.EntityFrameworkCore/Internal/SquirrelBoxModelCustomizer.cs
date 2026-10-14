@@ -13,6 +13,9 @@ internal sealed class SquirrelBoxModelCustomizer : ModelCustomizer
     public override void Customize(ModelBuilder modelBuilder, DbContext context)
     {
         base.Customize(modelBuilder, context);
-        modelBuilder.ApplySquirrelBox();
+        var extension = context.GetService<IDbContextOptions>()
+            .FindExtension<SquirrelBoxDbContextOptionsExtension>();
+
+        modelBuilder.ApplySquirrelBox(extension?.Options ?? new SquirrelBoxEntityFrameworkOptions());
     }
 }

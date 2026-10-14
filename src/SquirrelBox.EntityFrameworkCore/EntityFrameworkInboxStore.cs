@@ -199,7 +199,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         Ulid entryId,
         CancellationToken cancellationToken)
         => await dbContext.Set<SquirrelBoxInboxEntryRecord>()
-            .SingleOrDefaultAsync(record => record.Id == entryId.ToString(), cancellationToken)
+            .SingleOrDefaultAsync(record => record.Id == entryId, cancellationToken)
             ?? throw new InboxEntryNotFoundException(entryId);
 
     private static async Task<InboxOpenResult> ResolveDuplicateAsync(
@@ -325,7 +325,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     private static SquirrelBoxInboxEntryRecord ToRecord(InboxEntry entry)
         => new()
         {
-            Id = entry.Id.ToString(),
+            Id = entry.Id,
             Source = entry.Source,
             Operation = entry.Operation,
             IdempotencyKey = entry.IdempotencyKey,
@@ -365,7 +365,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     private static InboxEntry ToEntry(SquirrelBoxInboxEntryRecord record)
         => new()
         {
-            Id = Ulid.Parse(record.Id),
+            Id = record.Id,
             Source = record.Source,
             Operation = record.Operation,
             IdempotencyKey = record.IdempotencyKey,
@@ -408,8 +408,8 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
     private static SquirrelBoxInboxAttemptRecord ToAttemptRecord(InboxAttempt attempt)
         => new()
         {
-            Id = attempt.Id.ToString(),
-            InboxEntryId = attempt.InboxEntryId.ToString(),
+            Id = attempt.Id,
+            InboxEntryId = attempt.InboxEntryId,
             AttemptId = attempt.AttemptId,
             AttemptIdName = attempt.AttemptIdName,
             AttemptIdSource = attempt.AttemptIdSource.ToString(),

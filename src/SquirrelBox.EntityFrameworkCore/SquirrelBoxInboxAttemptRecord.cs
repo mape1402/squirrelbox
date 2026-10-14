@@ -8,16 +8,14 @@ namespace SquirrelBox.EntityFrameworkCore;
 public sealed class SquirrelBoxInboxAttemptRecord
 {
     /// <summary>
-    /// Gets or sets the ULID attempt record id stored as text.
+    /// Gets or sets the ULID attempt record id.
     /// </summary>
-    [MaxLength(26)]
-    public string Id { get; set; }
+    public Ulid Id { get; set; }
 
     /// <summary>
     /// Gets or sets the related inbox entry id.
     /// </summary>
-    [MaxLength(26)]
-    public string InboxEntryId { get; set; }
+    public Ulid InboxEntryId { get; set; }
 
     /// <summary>
     /// Gets or sets the effective attempt id.

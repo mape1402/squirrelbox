@@ -8,10 +8,9 @@ namespace SquirrelBox.EntityFrameworkCore;
 public sealed class SquirrelBoxOutboxEnvelopeRecord
 {
     /// <summary>
-    /// Gets or sets the ULID outbox envelope id stored as text.
+    /// Gets or sets the ULID outbox envelope id.
     /// </summary>
-    [MaxLength(26)]
-    public string Id { get; set; }
+    public Ulid Id { get; set; }
 
     /// <summary>
     /// Gets or sets the transport that should publish the envelope.
