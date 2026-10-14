@@ -80,7 +80,7 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
         CancellationToken cancellationToken)
         => ValueTask.FromResult(InboxCompletion.Empty);
 
-    private static Ulid ResolveInboxEntryId(MuleActionContext<TPayload> context)
+    private static global::System.Ulid ResolveInboxEntryId(MuleActionContext<TPayload> context)
     {
         if (!context.Metadata.TryGetValue(SquirrelBoxMuleMetadata.InboxEntryId, out var rawEntryId) ||
             string.IsNullOrWhiteSpace(rawEntryId))
@@ -91,7 +91,7 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
 
         try
         {
-            return Ulid.Parse(rawEntryId);
+            return global::System.Ulid.Parse(rawEntryId);
         }
         catch (Exception exception) when (exception is FormatException or ArgumentException)
         {

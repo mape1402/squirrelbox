@@ -5,6 +5,7 @@ using Mule;
 using Mule.InMemory;
 using NSubstitute;
 using SquirrelBox.InMemory;
+using Ulid = System.Ulid;
 
 namespace SquirrelBox.Mule.Tests;
 
@@ -26,7 +27,7 @@ public sealed class OutboxMuleSchedulerTests
                     configure(capturedOptions);
                 }),
                 Arg.Any<CancellationToken>())
-            .Returns(new Guid("22222222-2222-2222-2222-222222222222"));
+            .Returns(global::Mule.Ulid.NewUlid());
 
         var envelope = new OutboxEnvelope
         {

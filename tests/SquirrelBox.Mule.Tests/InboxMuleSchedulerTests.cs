@@ -7,6 +7,7 @@ using Mule;
 using Mule.InMemory;
 using NSubstitute;
 using SquirrelBox.InMemory;
+using Ulid = System.Ulid;
 
 namespace SquirrelBox.Mule.Tests;
 
@@ -50,6 +51,7 @@ public sealed class InboxMuleSchedulerTests
     {
         var mule = Substitute.For<IMuleClient>();
         EnqueueOptions capturedOptions = null;
+        var expectedActionId = global::Mule.Ulid.NewUlid();
         mule.EnqueueAsync(
                 Arg.Any<ActionKey>(),
                 Arg.Any<DeferredPayload>(),
@@ -59,7 +61,7 @@ public sealed class InboxMuleSchedulerTests
                     configure(capturedOptions);
                 }),
                 Arg.Any<CancellationToken>())
-            .Returns(new Guid("11111111-1111-1111-1111-111111111111"));
+            .Returns(expectedActionId);
 
         var services = new ServiceCollection();
         services.AddSingleton(mule);
@@ -78,7 +80,7 @@ public sealed class InboxMuleSchedulerTests
             executionMode: InboxExecutionMode.Deferred));
 
         var configured = false;
-        await scope.ServiceProvider.GetRequiredService<IInboxMuleScheduler>()
+        var actionId = await scope.ServiceProvider.GetRequiredService<IInboxMuleScheduler>()
             .EnqueueCurrentAsync(
                 Key,
                 new DeferredPayload("order-1"),
@@ -88,6 +90,7 @@ public sealed class InboxMuleSchedulerTests
                     options.Metadata["custom"] = "yes";
                 });
 
+        Assert.Equal(expectedActionId, actionId);
         Assert.Equal("trace-1", capturedOptions.CorrelationId);
         Assert.Equal(opened.Entry.Id.ToString(), capturedOptions.DeduplicationKey);
         Assert.Equal(opened.Entry.Id.ToString(), capturedOptions.Metadata[SquirrelBoxMuleMetadata.InboxEntryId]);
@@ -110,7 +113,7 @@ public sealed class InboxMuleSchedulerTests
                     configure(capturedOptions);
                 }),
                 Arg.Any<CancellationToken>())
-            .Returns(new Guid("22222222-2222-2222-2222-222222222222"));
+            .Returns(global::Mule.Ulid.NewUlid());
 
         var services = new ServiceCollection();
         services.AddSingleton(mule);
@@ -166,7 +169,7 @@ public sealed class InboxMuleSchedulerTests
                     configure(capturedOptions);
                 }),
                 Arg.Any<CancellationToken>())
-            .Returns(new Guid("33333333-3333-3333-3333-333333333333"));
+            .Returns(global::Mule.Ulid.NewUlid());
 
         var services = new ServiceCollection();
         services.AddSingleton(mule);
@@ -268,7 +271,7 @@ public sealed class InboxMuleSchedulerTests
                     configure(capturedOptions);
                 }),
                 Arg.Any<CancellationToken>())
-            .Returns(new Guid("44444444-4444-4444-4444-444444444444"));
+            .Returns(global::Mule.Ulid.NewUlid());
 
         var muleSettings = new MuleSettings();
         configureMule(muleSettings);

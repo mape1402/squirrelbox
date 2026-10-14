@@ -137,12 +137,12 @@ public sealed class MessagingConstructorGuardCoverageTests
 
     private sealed class FakeInboxMuleScheduler : IInboxMuleScheduler
     {
-        public ValueTask<Guid> EnqueueCurrentAsync<TPayload>(
+        public ValueTask<global::Mule.Ulid> EnqueueCurrentAsync<TPayload>(
             ActionKey key,
             TPayload payload,
             Action<EnqueueOptions> configure = null,
             CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(Guid.NewGuid());
+            => ValueTask.FromResult(global::Mule.Ulid.NewUlid());
     }
 
     private sealed class FakeConsumeEnvelopeFactory : IPigeonConsumeEnvelopeFactory

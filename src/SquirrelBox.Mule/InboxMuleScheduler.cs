@@ -29,7 +29,7 @@ public sealed class InboxMuleScheduler : IInboxMuleScheduler
     }
 
     /// <inheritdoc />
-    public ValueTask<Guid> EnqueueCurrentAsync<TPayload>(
+    public ValueTask<global::Mule.Ulid> EnqueueCurrentAsync<TPayload>(
         ActionKey key,
         TPayload payload,
         Action<EnqueueOptions> configure = null,

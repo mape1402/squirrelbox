@@ -16,7 +16,7 @@ public interface IInboxMuleScheduler
     /// <param name="configure">Optional Mule enqueue configuration.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The Mule durable action id.</returns>
-    ValueTask<Guid> EnqueueCurrentAsync<TPayload>(
+    ValueTask<global::Mule.Ulid> EnqueueCurrentAsync<TPayload>(
         ActionKey key,
         TPayload payload,
         Action<EnqueueOptions> configure = null,
