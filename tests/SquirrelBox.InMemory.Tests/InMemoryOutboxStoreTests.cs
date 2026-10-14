@@ -211,6 +211,18 @@ public sealed class InMemoryOutboxStoreTests
         Assert.Equal("pigeon", Assert.Single(again).Metadata["transport"]);
     }
 
+    [Fact]
+    public async Task Null_queries_return_all_envelopes_and_attempts()
+    {
+        var store = new InMemoryOutboxStore();
+        var envelope = CreateEnvelope("pigeon", OutboxStatus.Pending);
+        await store.AddAsync(envelope);
+        await store.MarkPublishingAsync(envelope.Id, DateTimeOffset.UtcNow);
+
+        Assert.Single(await store.QueryAsync(null));
+        Assert.Single(await store.QueryAttemptsAsync(null));
+    }
+
     private static OutboxEnvelope CreateEnvelope(string transport, OutboxStatus status)
         => new()
         {

@@ -1,3 +1,4 @@
+using System.Reflection;
 using SquirrelBox.InMemory;
 
 namespace SquirrelBox.InMemory.Tests;
@@ -183,6 +184,142 @@ public sealed class InMemoryInboxStoreTests
         Assert.Equal("retry", entry.Failure);
     }
 
+    [Fact]
+    public async Task QueryAsync_accepts_null_query_and_filter_short_circuits()
+    {
+        var store = new InMemoryInboxStore();
+        var first = Create("POST /orders", correlationId: "corr-1");
+        var second = Create("POST /payments", correlationId: "corr-2");
+        second.IdempotencyKey = "payment-key";
+        await store.TryOpenAsync(first);
+        await store.TryOpenAsync(second);
+
+        var all = await store.QueryAsync(null);
+        var noMatches = await store.QueryAsync(new InboxQuery
+        {
+            Status = InboxStatus.Completed,
+            Source = "missing",
+            Operation = "missing",
+            IdempotencyKey = "missing",
+            CorrelationId = "missing"
+        });
+
+        Assert.Equal(2, all.Count);
+        Assert.Empty(noMatches);
+    }
+
+    [Fact]
+    public async Task MarkFailedAsync_and_mark_retrying_accept_null_failure()
+    {
+        var store = new InMemoryInboxStore();
+        var entry = Create("POST /orders");
+        await store.TryOpenAsync(entry);
+
+        await store.MarkFailedAsync(entry.Id, null, DateTimeOffset.UtcNow);
+        await store.MarkRetryingAsync(entry.Id, null, DateTimeOffset.UtcNow);
+
+        var stored = await store.GetAsync(entry.Id);
+        Assert.Equal(InboxStatus.Retrying, stored.Status);
+        Assert.Null(stored.Failure);
+        Assert.Null(stored.FailureDetails);
+    }
+
+    [Fact]
+    public async Task TryOpenAsync_records_attempts_and_reopens_with_incoming_correlation_when_failed_expired()
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        var first = Create("POST /orders", correlationId: "original", createdOnUtc: now);
+        first.CurrentAttempt = CreateAttempt("attempt-1", "trace-1");
+        first.ExpiresOnUtc = now.AddSeconds(1);
+        await store.TryOpenAsync(first);
+        await store.MarkFailedAsync(first.Id, new InboxFailure { Details = "failed" }, now);
+
+        var retry = Create("POST /orders", correlationId: "incoming", createdOnUtc: now.AddSeconds(2));
+        retry.CurrentAttempt = CreateAttempt("attempt-2", "trace-2");
+        retry.CompletedLock = InboxCompletedLockMode.Forever;
+        retry.Deferred = null;
+
+        var reopened = await store.TryOpenAsync(retry);
+
+        Assert.Equal(InboxOpenState.Opened, reopened.State);
+        Assert.Equal("incoming", reopened.Entry.CorrelationId);
+        Assert.Equal("attempt-2", reopened.Entry.OriginalAttemptId);
+        Assert.Equal("trace-2", reopened.Entry.OriginalTraceId);
+        Assert.Equal(InboxCompletedLockMode.Forever, reopened.Entry.CompletedLock);
+        Assert.NotNull(reopened.Entry.Deferred);
+        Assert.Equal("attempt-2", reopened.Entry.LastAttemptId);
+        Assert.Equal("trace-2", reopened.Entry.LastTraceId);
+    }
+
+    [Fact]
+    public async Task TryOpenAsync_returns_duplicate_failed_for_failed_forever_entry()
+    {
+        var store = new InMemoryInboxStore();
+        var entry = Create("POST /orders");
+        entry.CompletedLock = InboxCompletedLockMode.Forever;
+        await store.TryOpenAsync(entry);
+        await store.MarkFailedAsync(entry.Id, new InboxFailure { Details = "failed" }, DateTimeOffset.UtcNow);
+
+        var duplicate = await store.TryOpenAsync(Create("POST /orders"));
+
+        Assert.Equal(InboxOpenState.Opened, duplicate.State);
+    }
+
+    [Fact]
+    public async Task TryOpenAsync_keeps_active_entry_when_timeout_is_missing_or_zero()
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        var missingTimeout = Create("POST /orders", createdOnUtc: now);
+        missingTimeout.UpdatedOnUtc = now.AddMinutes(-5);
+        missingTimeout.Deferred = null;
+        var zeroTimeout = Create("POST /payments", createdOnUtc: now);
+        zeroTimeout.UpdatedOnUtc = now.AddMinutes(-5);
+        zeroTimeout.Deferred.InProgressTimeout = TimeSpan.Zero;
+
+        await store.TryOpenAsync(missingTimeout);
+        await store.TryOpenAsync(zeroTimeout);
+
+        var missingResult = await store.TryOpenAsync(Create("POST /orders", createdOnUtc: now.AddMinutes(10)));
+        var zeroResult = await store.TryOpenAsync(Create("POST /payments", createdOnUtc: now.AddMinutes(10)));
+
+        Assert.Equal(InboxOpenState.DuplicateInProgress, missingResult.State);
+        Assert.Equal(InboxOpenState.DuplicateInProgress, zeroResult.State);
+    }
+
+    [Fact]
+    public void Internal_mappings_cover_failed_default_lock_and_generated_attempt_identity()
+    {
+        var storeType = typeof(InMemoryInboxStore);
+        var flags = BindingFlags.Static | BindingFlags.NonPublic;
+        var mapDuplicate = storeType.GetMethod("MapDuplicateState", flags)!;
+        var reopen = storeType.GetMethod("Reopen", flags)!;
+        var cloneAttempt = storeType.GetMethod("CloneAttempt", flags)!;
+        var stored = Create("POST /orders");
+        var defaultLock = Create("POST /orders");
+        defaultLock.CompletedLock = InboxCompletedLockMode.Default;
+        var foreverLock = Create("POST /orders");
+        foreverLock.CompletedLock = InboxCompletedLockMode.Forever;
+
+        Assert.Equal(
+            InboxOpenState.DuplicateFailed,
+            mapDuplicate.Invoke(null, new object[] { new InboxEntry { Status = InboxStatus.Failed } }));
+
+        reopen.Invoke(null, new object[] { stored, defaultLock, false });
+        Assert.Equal(InboxCompletedLockMode.UntilExpiration, stored.CompletedLock);
+        reopen.Invoke(null, new object[] { stored, foreverLock, false });
+        Assert.Equal(InboxCompletedLockMode.Forever, stored.CompletedLock);
+
+        var cloned = (InboxAttempt)cloneAttempt.Invoke(null, new object[]
+        {
+            new InboxAttempt { Id = default, AttemptId = "attempt" },
+            stored.Id,
+            InboxOpenState.Opened
+        })!;
+        Assert.NotEqual(default, cloned.Id);
+    }
+
     private static InboxEntry Create(
         string operation,
         string correlationId = "correlation",
@@ -201,5 +338,18 @@ public sealed class InMemoryInboxStoreTests
             Status = InboxStatus.Started,
             CreatedOnUtc = createdOnUtc ?? DateTimeOffset.UtcNow,
             UpdatedOnUtc = createdOnUtc ?? DateTimeOffset.UtcNow
+        };
+
+    private static InboxAttempt CreateAttempt(string attemptId, string traceId)
+        => new()
+        {
+            Id = Ulid.NewUlid(),
+            AttemptId = attemptId,
+            AttemptIdName = SquirrelBoxMetadataNames.AttemptId,
+            AttemptIdSource = SquirrelBoxMetadataValueSource.Generated,
+            TraceId = traceId,
+            TraceIdName = SquirrelBoxMetadataNames.TraceId,
+            TraceIdSource = SquirrelBoxMetadataValueSource.Generated,
+            CreatedOnUtc = DateTimeOffset.UtcNow
         };
 }
