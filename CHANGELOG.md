@@ -4,6 +4,25 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.0.0] - 2026-10-14
+
+### Added
+
+- Added configurable EF Core storage mappings from dependency registration, including schema/table customization, entity-level configuration hooks, and ULID text or SQL Server `binary(16)` storage.
+- Added outbox attempt diagnostics so each publish lifecycle records `Publishing`, `Published`, `Failed`, or `Discarded` attempts with trace ids, metadata, completion timestamps, and failures.
+- Added `IOutboxPayloadTypeNameResolver` so outbox payload type names can be compact by default and replaced by hosts that need stable aliases.
+- Added a reproducible coverage badge pipeline with Cobertura collection, percentage badge JSON generation, and CI coverage threshold validation.
+- Added focused unit and integration coverage for dashboard authentication, Pigeon rejection/deferred failure paths, operation replay/failure paths, and in-memory store lifecycle branches.
+- Added a new README hero image focused on inbox/outbox flow, metadata propagation, and durable execution.
+
+### Changed
+
+- **Breaking:** renamed the ASP.NET Core payload-aware APIs from `[SquirrelBoxPayload]` and `.WithSquirrelBoxPayload()` to `[SquirrelBoxInbox]` and `.WithSquirrelBoxInbox()`.
+- Changed default outbox payload type persistence from long assembly-qualified names to compact CLR full names while keeping legacy assembly-qualified resolution for replay.
+- Changed EF Core configuration guidance and APIs so applications configure SquirrelBox only through dependency registration; application `DbContext` types still do not need SquirrelBox `DbSet` properties or `OnModelCreating` calls.
+- Tightened EF Core default column sizing for operational fields such as payload type, destination, and failure details, while keeping JSON payload/metadata fields unbounded by default.
+- Updated README package examples, EF storage guidance, HTTP API migration notes, outbox attempts, and payload type aliasing guidance for 4.0.0.
+
 ## [v3.2.2] - 2026-10-14
 
 ### Fixed

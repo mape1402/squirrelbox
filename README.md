@@ -3,7 +3,7 @@
 [![Build](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![NuGet](https://img.shields.io/nuget/v/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
 [![Downloads](https://img.shields.io/nuget/dt/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
-[![Coverage](https://img.shields.io/badge/Coverage-enabled-0E7C86.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/mape1402/squirrelbox/main/assets/coverage-badge.json)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![License](https://img.shields.io/github/license/mape1402/squirrelbox.svg)](LICENSE)
 
 ![SquirrelBox README hero](https://raw.githubusercontent.com/mape1402/squirrelbox/main/assets/readme-hero.png)
@@ -28,11 +28,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="3.2.1" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="3.2.1" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="3.2.1" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="3.2.1" />
-<PackageReference Include="SquirrelBox.Mule" Version="3.2.1" />
+<PackageReference Include="SquirrelBox" Version="4.0.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="4.0.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="4.0.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="4.0.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="4.0.0" />
 ```
 
 ## Getting Started
@@ -68,7 +68,12 @@ services
             policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(10);
         });
     })
-    .UseEntityFramework<AppDbContext>();
+    .UseEntityFramework<AppDbContext>(ef =>
+    {
+        ef.UseSqlServerDefaults(sql => sql.StoreUlidsAsBinary16());
+        ef.ConfigureOutboxEnvelopes(entity =>
+            entity.Property(envelope => envelope.PayloadType).HasMaxLength(256));
+    });
 
 services.AddSquirrelBoxMule();
 services.AddMule(mule => mule
@@ -100,6 +105,21 @@ call into the SquirrelBox chain:
 services
     .AddSquirrelBox()
     .UseEntityFramework<AppDbContext>();
+```
+
+The EF provider is closed by default and extensible by registration. Applications never call
+SquirrelBox model builders from `OnModelCreating`; configure table/schema, ULID storage, and
+entity-level details in the provider callback instead. The default ULID storage is `char(26)`-
+style text. SQL Server hosts can opt into compact `binary(16)` storage:
+
+```csharp
+services
+    .AddSquirrelBox()
+    .UseEntityFramework<AppDbContext>(ef =>
+    {
+        ef.UseSchema("integration");
+        ef.UseSqlServerDefaults(sql => sql.StoreUlidsAsBinary16());
+    });
 ```
 
 ## Inbox
@@ -273,6 +293,8 @@ Status
 ```
 
 Mule later executes `squirrelbox.outbox.publish.v1`, loads the envelope by ULID, resolves the matching `IOutboxTransportPublisher`, and marks the envelope as `Published` or `Failed`.
+Each publish attempt is also recorded as an `OutboxAttempt` so dashboards and diagnostics can
+show publishing, published, failed, and discarded attempts with trace ids and failures.
 
 Custom publisher:
 
@@ -289,6 +311,14 @@ public sealed class MyPublisher : IOutboxTransportPublisher
         return OutboxPublishResult.Success;
     }
 }
+```
+
+By default, outbox payload types are persisted as compact CLR full names instead of long
+assembly-qualified strings. Hosts that need stable aliases can replace the resolver:
+
+```csharp
+services.AddSingleton<IOutboxPayloadTypeNameResolver, MyOutboxPayloadTypeNameResolver>();
+services.AddSquirrelBox();
 ```
 
 ## Profiles
@@ -447,6 +477,13 @@ Payload-aware endpoints let `UseSquirrelBox()` defer the open step until after m
 The filter opens or continues the inbox with the bound DTO, verifies that repeated explicit
 keys keep the same payload hash, and reuses the middleware response behavior for replay and
 conflict responses.
+
+SquirrelBox 4.0 renamed the payload-aware HTTP API to make the intent explicit:
+
+```text
+[SquirrelBoxPayload]      -> [SquirrelBoxInbox]
+.WithSquirrelBoxPayload() -> .WithSquirrelBoxInbox()
+```
 
 ## Dashboard
 
