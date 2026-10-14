@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Pigeon.Messaging;
@@ -104,6 +105,57 @@ public sealed class SquirrelBoxPigeonOutboxTests
     }
 
     [Fact]
+    public async Task PublishDecisionInterceptor_continues_when_outbox_is_disabled_or_predicate_rejects()
+    {
+        using var disabledProvider = CreateProvider(configurePigeon: options => options.EnableOutbox = false);
+        using var disabledScope = disabledProvider.CreateScope();
+        var disabled = await ActivatorUtilities
+            .CreateInstance<SquirrelBoxPigeonOutboxInterceptor>(disabledScope.ServiceProvider)
+            .InterceptAsync(CreatePublishContext(isRaw: false));
+
+        using var predicateProvider = CreateProvider(configurePigeon: options => options.OutboxPredicate = _ => false);
+        using var predicateScope = predicateProvider.CreateScope();
+        var rejected = await ActivatorUtilities
+            .CreateInstance<SquirrelBoxPigeonOutboxInterceptor>(predicateScope.ServiceProvider)
+            .InterceptAsync(CreatePublishContext(isRaw: false));
+
+        Assert.Equal(PigeonPublishDecision.Continue, disabled.Decision);
+        Assert.Equal(PigeonPublishDecision.Continue, rejected.Decision);
+    }
+
+    [Fact]
+    public async Task PublishDecisionInterceptor_handles_null_headers_metadata_and_exchange_destination()
+    {
+        var publishEnvelope = new PigeonPublishEnvelope
+        {
+            Transport = "pigeon",
+            Version = "1.2.0",
+            Operation = "create-order",
+            Exchange = "events",
+            RoutingKey = "orders.created",
+            ContentType = "application/json",
+            Payload = JsonSerializer.SerializeToUtf8Bytes(new OrderMessage("order-1"), JsonOptions),
+            PayloadType = typeof(OrderMessage).AssemblyQualifiedName,
+            CorrelationId = "corr-1",
+            TraceId = "trace-1",
+            IsRaw = true
+        };
+        using var provider = CreateProvider(envelopeFactory: new FixedPigeonPublishEnvelopeFactory(publishEnvelope));
+        using var scope = provider.CreateScope();
+
+        var result = await ActivatorUtilities
+            .CreateInstance<SquirrelBoxPigeonOutboxInterceptor>(scope.ServiceProvider)
+            .InterceptAsync(CreatePublishContext(isRaw: true));
+        var envelope = Assert.Single(await scope.ServiceProvider.GetRequiredService<IOutboxStore>()
+            .QueryAsync(new OutboxQuery { Transport = "pigeon" }));
+
+        Assert.Equal(PigeonPublishDecision.Skip, result.Decision);
+        Assert.Equal("events:orders.created", envelope.Destination);
+        Assert.Empty(envelope.Headers);
+        Assert.Equal("True", envelope.Metadata["pigeon-is-raw"]);
+    }
+
+    [Fact]
     public async Task PigeonOutboxPublisher_replays_pigeon_publish_envelope_through_pigeon_invoker()
     {
         using var provider = CreateProvider();
@@ -157,6 +209,51 @@ public sealed class SquirrelBoxPigeonOutboxTests
     }
 
     [Fact]
+    public async Task PigeonOutboxPublisher_preserves_invalid_structured_metadata_as_envelope_metadata_only()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = CreateWrappedPublishEnvelope(includeSquirrelBoxMetadata: false);
+        var envelope = CreateEnvelope(outboxSerializer, publishEnvelope, typeof(PigeonPublishEnvelope));
+        envelope.Metadata[SquirrelBoxMetadataNames.MetadataSection] = "{not-json";
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        var result = await publisher.PublishAsync(envelope);
+        var invoker = provider.GetRequiredService<FakePigeonPublisherInvoker>();
+
+        Assert.True(result.Succeeded);
+        var published = Assert.Single(invoker.Published);
+        Assert.Equal("{not-json", published.Metadata[SquirrelBoxMetadataNames.MetadataSection]);
+        using var json = JsonDocument.Parse(published.Payload);
+        var metadata = ReadMetadataObject(json.RootElement);
+        Assert.False(metadata.TryGetProperty(SquirrelBoxMetadataNames.MetadataSection, out _));
+    }
+
+    [Fact]
+    public async Task PigeonOutboxPublisher_adds_durable_metadata_to_raw_publish_without_rewriting_payload()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = CreatePublishEnvelope(isRaw: true);
+        var originalPayload = publishEnvelope.Payload.ToArray();
+        var envelope = CreateEnvelope(outboxSerializer, publishEnvelope, typeof(PigeonPublishEnvelope));
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = "raw-key"
+            }
+        }.WriteTo(envelope.Metadata);
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        await publisher.PublishAsync(envelope);
+
+        var published = Assert.Single(provider.GetRequiredService<FakePigeonPublisherInvoker>().Published);
+        Assert.Equal(originalPayload, published.Payload);
+        Assert.Equal("raw-key", ReadSquirrelBoxMetadata(published.Metadata).IdempotencyKey);
+    }
+
+    [Fact]
     public async Task PigeonOutboxPublisher_injects_structured_metadata_into_wrapped_payload_from_outbox_envelope()
     {
         using var provider = CreateProvider();
@@ -186,6 +283,41 @@ public sealed class SquirrelBoxPigeonOutboxTests
         Assert.Equal("outbox-trace", metadata.TraceId);
         Assert.Equal("outbox-attempt", metadata.AttemptId);
         AssertWrappedPayloadMetadataIsObject(published.Payload);
+    }
+
+    [Fact]
+    public async Task PigeonOutboxPublisher_does_not_rewrite_wrapped_payload_when_metadata_already_exists()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = CreateWrappedPublishEnvelope(includeSquirrelBoxMetadata: true);
+        var originalPayload = publishEnvelope.Payload.ToArray();
+        var envelope = CreateEnvelope(outboxSerializer, publishEnvelope, typeof(PigeonPublishEnvelope));
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = "outbox-key"
+            }
+        }.WriteTo(envelope.Metadata);
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        await publisher.PublishAsync(envelope);
+
+        var published = Assert.Single(provider.GetRequiredService<FakePigeonPublisherInvoker>().Published);
+        Assert.Equal(originalPayload, published.Payload);
+        Assert.Equal("payload-key", ReadWrappedPayloadSquirrelBoxMetadata(published.Payload).IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task PigeonOutboxPublisher_rejects_unsupported_outbox_payload_type()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var envelope = CreateEnvelope(outboxSerializer, "unsupported", typeof(string));
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.PublishAsync(envelope).AsTask());
     }
 
     [Fact]
@@ -219,14 +351,139 @@ public sealed class SquirrelBoxPigeonOutboxTests
         Assert.Equal(legacyPayload.Payload, Encoding.UTF8.GetString(published.Payload));
     }
 
-    private static ServiceProvider CreateProvider()
+    [Fact]
+    public void PigeonMetadataSynchronizer_ignores_blank_metadata_json()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false);
+
+        var enriched = EnrichWithMetadataJson(envelope, " ");
+
+        Assert.Same(envelope, enriched);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_keeps_empty_structured_metadata_on_envelope_only()
+    {
+        var envelope = CreatePublishEnvelope(isRaw: false);
+
+        var enriched = EnrichWithMetadataJson(envelope, "{}");
+
+        Assert.Equal("{}", enriched.Metadata[SquirrelBoxMetadataNames.MetadataSection]);
+        Assert.Equal(envelope.Payload, enriched.Payload);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_creates_wrapped_metadata_when_payload_metadata_is_null()
+    {
+        var envelope = CreateWrappedPublishEnvelopeWithMetadata(metadata: null);
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "key-from-null"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson);
+
+        Assert.Equal("key-from-null", ReadWrappedPayloadSquirrelBoxMetadata(enriched.Payload).IdempotencyKey);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_replaces_string_metadata_section_with_structured_object()
+    {
+        var envelope = CreateWrappedPublishEnvelopeWithMetadata(new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SquirrelBoxMetadataNames.MetadataSection] = "legacy-string"
+        });
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "key-from-string"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson);
+
+        Assert.Equal("key-from-string", ReadWrappedPayloadSquirrelBoxMetadata(enriched.Payload).IdempotencyKey);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_preserves_direct_structured_payload_metadata()
+    {
+        var envelope = CreateWrappedPublishEnvelopeWithMetadata(new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase));
+        var payload = CreateWrappedPayloadWithDirectMetadata(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "payload-key"
+        });
+        var serializer = new PayloadReturningSerializer(payload);
+        var originalPayload = envelope.Payload.ToArray();
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "ignored"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson, serializer);
+
+        Assert.Equal(originalPayload, enriched.Payload);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_replaces_direct_string_payload_metadata()
+    {
+        var envelope = CreateWrappedPublishEnvelopeWithMetadata(new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase));
+        var payload = CreateWrappedPayloadWithDirectMetadata("legacy-string");
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "rewritten-key"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson, new PayloadReturningSerializer(payload));
+
+        Assert.Equal("rewritten-key", ReadWrappedPayloadSquirrelBoxMetadata(enriched.Payload).IdempotencyKey);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_preserves_unknown_structured_metadata_section()
+    {
+        var envelope = CreateWrappedPublishEnvelopeWithMetadata(new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SquirrelBoxMetadataNames.MetadataSection] = true
+        });
+        var originalPayload = envelope.Payload.ToArray();
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "ignored"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson);
+
+        Assert.Equal(originalPayload, enriched.Payload);
+    }
+
+    [Fact]
+    public void PigeonMetadataSynchronizer_preserves_payload_when_serializer_returns_null()
+    {
+        var envelope = CreateWrappedPublishEnvelope(includeSquirrelBoxMetadata: false);
+        var originalPayload = envelope.Payload.ToArray();
+        var metadataJson = JsonSerializer.Serialize(new SquirrelBoxMetadata
+        {
+            IdempotencyKey = "ignored"
+        }, JsonOptions);
+
+        var enriched = EnrichWithMetadataJson(envelope, metadataJson, new NullPigeonSerializer());
+
+        Assert.Equal(originalPayload, enriched.Payload);
+        Assert.Equal("ignored", ReadSquirrelBoxMetadata(enriched.Metadata).IdempotencyKey);
+    }
+
+    private static ServiceProvider CreateProvider(
+        Action<SquirrelBoxPigeonOptions> configurePigeon = null,
+        IPigeonPublishEnvelopeFactory envelopeFactory = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton(Options.Create(new SquirrelBoxPigeonOptions { EnableOutbox = true }));
+        var pigeonOptions = new SquirrelBoxPigeonOptions { EnableOutbox = true };
+        configurePigeon?.Invoke(pigeonOptions);
+        services.AddSingleton(Options.Create(pigeonOptions));
         services.AddSingleton<FakePigeonPublishEnvelopeFactory>();
         services.AddSingleton<ISerializer, FakePigeonSerializer>();
         services.AddSingleton<IPigeonPublishEnvelopeFactory>(
-            provider => provider.GetRequiredService<FakePigeonPublishEnvelopeFactory>());
+            provider => envelopeFactory ?? provider.GetRequiredService<FakePigeonPublishEnvelopeFactory>());
         services.AddSingleton<FakePigeonPublisherInvoker>();
         services.AddSingleton<IPigeonPublisherInvoker>(
             provider => provider.GetRequiredService<FakePigeonPublisherInvoker>());
@@ -331,6 +588,47 @@ public sealed class SquirrelBoxPigeonOutboxTests
         };
     }
 
+    private static PigeonPublishEnvelope CreateWrappedPublishEnvelopeWithMetadata(Dictionary<string, object> metadata)
+    {
+        var wrappedPayload = new WrappedPayload<OrderMessage>
+        {
+            Domain = "tests",
+            MessageVersion = SemanticVersion.Parse("1.2.0"),
+            CreatedOnUtc = DateTimeOffset.UtcNow,
+            Message = new OrderMessage("order-1"),
+            Metadata = metadata
+        };
+
+        return new PigeonPublishEnvelope
+        {
+            Transport = "pigeon",
+            Topic = "orders",
+            Version = "1.2.0",
+            Operation = "create-order",
+            Destination = "orders",
+            RoutingKey = "orders",
+            ContentType = "application/json",
+            Payload = JsonSerializer.SerializeToUtf8Bytes(wrappedPayload, JsonOptions),
+            PayloadType = typeof(WrappedPayload<OrderMessage>).AssemblyQualifiedName,
+            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            CorrelationId = "corr-1",
+            TraceId = "trace-1"
+        };
+    }
+
+    private static WrappedPayload<OrderMessage> CreateWrappedPayloadWithDirectMetadata(object metadataValue)
+        => new()
+        {
+            Domain = "tests",
+            MessageVersion = SemanticVersion.Parse("1.2.0"),
+            CreatedOnUtc = DateTimeOffset.UtcNow,
+            Message = new OrderMessage("order-1"),
+            Metadata = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                [SquirrelBoxMetadataNames.MetadataSection] = metadataValue
+            }
+        };
+
     private static OutboxEnvelope CreateEnvelope(
         IOutboxEnvelopeSerializer serializer,
         object payload,
@@ -390,6 +688,24 @@ public sealed class SquirrelBoxPigeonOutboxTests
     private static void AssertNoFlatIdentityMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
     {
         Assert.DoesNotContain(metadata, item => IsFlatIdentityKey(item.Key));
+    }
+
+    private static PigeonPublishEnvelope EnrichWithMetadataJson(
+        PigeonPublishEnvelope envelope,
+        string metadataJson,
+        ISerializer serializer = null)
+    {
+        var synchronizer = typeof(SquirrelBoxPigeonOutboxPublisher)
+            .Assembly
+            .GetType("SquirrelBox.Messaging.Pigeon.SquirrelBoxPigeonMetadataSynchronizer", throwOnError: true);
+        var method = synchronizer.GetMethod(
+            "Enrich",
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: [typeof(PigeonPublishEnvelope), typeof(string), typeof(ISerializer), typeof(ILogger)],
+            modifiers: null);
+
+        return (PigeonPublishEnvelope)method.Invoke(null, [envelope, metadataJson, serializer ?? new FakePigeonSerializer(), null]);
     }
 
     private static bool IsFlatIdentityKey(string key)
@@ -461,6 +777,32 @@ public sealed class SquirrelBoxPigeonOutboxTests
 
         public object Deserialize(string rawJson, Type targetType)
             => JsonSerializer.Deserialize(rawJson, targetType, JsonOptions);
+    }
+
+    private sealed class FixedPigeonPublishEnvelopeFactory(PigeonPublishEnvelope envelope) : IPigeonPublishEnvelopeFactory
+    {
+        public ValueTask<PigeonPublishEnvelope> CreateAsync(
+            PublishContext context,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(envelope);
+    }
+
+    private sealed class NullPigeonSerializer : ISerializer
+    {
+        public string Serialize(object payload)
+            => JsonSerializer.Serialize(payload, payload.GetType(), JsonOptions);
+
+        public object Deserialize(string rawJson, Type targetType)
+            => null;
+    }
+
+    private sealed class PayloadReturningSerializer(object payload) : ISerializer
+    {
+        public string Serialize(object value)
+            => JsonSerializer.Serialize(value, value.GetType(), JsonOptions);
+
+        public object Deserialize(string rawJson, Type targetType)
+            => payload;
     }
 
     private sealed class FakePigeonPublisherInvoker : IPigeonPublisherInvoker
