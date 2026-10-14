@@ -275,7 +275,56 @@ public sealed class SquirrelBoxInboxFilterE2ETests
         Assert.Equal("minimal-same-key", conflict.Headers.GetValues("Idempotency-Key").Single());
     }
 
-    private static TestServer CreateServer(TimeProvider timeProvider = null)
+    [Fact]
+    public async Task Minimal_api_filter_continues_when_configured_payload_argument_is_missing()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/minimal-missing-argument-orders", new PayloadOrderRequest("missing"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Idempotency-Key"));
+    }
+
+    [Fact]
+    public async Task Minimal_api_filter_continues_when_payload_argument_is_null()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+
+        var response = await client.PostAsJsonAsync<PayloadOrderRequest>("/minimal-null-orders", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Idempotency-Key"));
+    }
+
+    [Fact]
+    public async Task Minimal_api_filter_replays_status_and_headers_without_body_when_capture_exceeds_limit()
+    {
+        using var server = CreateServer(configureAspNetCore: options => options.MaxReplayBodyBytes = 2);
+        using var client = server.CreateClient();
+        using var first = new HttpRequestMessage(HttpMethod.Post, "/minimal-large-orders");
+        first.Headers.Add("Idempotency-Key", "minimal-large-key");
+        first.Content = JsonContent.Create(new PayloadOrderRequest("large"));
+
+        var firstResponse = await client.SendAsync(first);
+
+        using var duplicate = new HttpRequestMessage(HttpMethod.Post, "/minimal-large-orders");
+        duplicate.Headers.Add("Idempotency-Key", "minimal-large-key");
+        duplicate.Content = JsonContent.Create(new PayloadOrderRequest("large"));
+        var duplicateResponse = await client.SendAsync(duplicate);
+
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+        Assert.Equal("large-body", await firstResponse.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
+        Assert.Equal(string.Empty, await duplicateResponse.Content.ReadAsStringAsync());
+        Assert.Equal("\"large\"", duplicateResponse.Headers.ETag?.Tag);
+    }
+
+    private static TestServer CreateServer(
+        TimeProvider timeProvider = null,
+        Action<SquirrelBoxAspNetCoreOptions> configureAspNetCore = null)
     {
         var windowExecutions = 0;
         var foreverExecutions = 0;
@@ -291,7 +340,7 @@ public sealed class SquirrelBoxInboxFilterE2ETests
                     .AddControllers()
                     .AddApplicationPart(typeof(PayloadOrdersController).Assembly);
                 services.AddSquirrelBox().UseInMemory();
-                services.AddSquirrelBoxAspNetCore();
+                services.AddSquirrelBoxAspNetCore(configureAspNetCore);
             })
             .Configure(app =>
             {
@@ -317,6 +366,16 @@ public sealed class SquirrelBoxInboxFilterE2ETests
                                 request.Id,
                                 IdempotencyKey = identityAccessor.Current?.Operation.IdempotencyKey.Value
                             }))
+                        .WithSquirrelBoxInbox();
+
+                    endpoints
+                        .MapPost("/minimal-missing-argument-orders", (PayloadOrderRequest request) =>
+                            Results.Ok(new { request.Id }))
+                        .WithSquirrelBoxInbox("missing");
+
+                    endpoints
+                        .MapPost("/minimal-null-orders", (PayloadOrderRequest request) =>
+                            Results.Ok(new { Id = request?.Id }))
                         .WithSquirrelBoxInbox();
 
                     endpoints
@@ -370,6 +429,15 @@ public sealed class SquirrelBoxInboxFilterE2ETests
                             options.EntryLifetime = TimeSpan.FromSeconds(5);
                             options.CompletedLock = InboxCompletedLockMode.Forever;
                         });
+
+                    endpoints
+                        .MapPost("/minimal-large-orders", async (PayloadOrderRequest request, HttpContext context) =>
+                        {
+                            context.Response.StatusCode = StatusCodes.Status201Created;
+                            context.Response.Headers.ETag = "\"large\"";
+                            await context.Response.WriteAsync("large-body");
+                        })
+                        .WithSquirrelBoxInbox();
                 });
             });
 
