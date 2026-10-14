@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Pigeon.Messaging.Consuming.Dispatching;
 using Pigeon.Messaging.Contracts;
 using SquirrelBox.Messaging;
@@ -16,6 +18,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
     private readonly IInboxMuleScheduler _scheduler;
     private readonly IInboxService _inbox;
     private readonly IPigeonConsumeEnvelopeFactory _envelopeFactory;
+    private readonly ILogger<SquirrelBoxPigeonDecisionInterceptor> _logger;
     private readonly SquirrelBoxPigeonOptions _options;
 
     /// <summary>
@@ -27,7 +30,8 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
         IInboxMuleScheduler scheduler,
         IInboxService inbox,
         IPigeonConsumeEnvelopeFactory envelopeFactory,
-        IOptions<SquirrelBoxPigeonOptions> options)
+        IOptions<SquirrelBoxPigeonOptions> options,
+        ILogger<SquirrelBoxPigeonDecisionInterceptor> logger = null)
     {
         _messages = messages ?? throw new ArgumentNullException(nameof(messages));
         _metadataEnricher = metadataEnricher ?? throw new ArgumentNullException(nameof(metadataEnricher));
@@ -35,6 +39,7 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
         _inbox = inbox ?? throw new ArgumentNullException(nameof(inbox));
         _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger ?? NullLogger<SquirrelBoxPigeonDecisionInterceptor>.Instance;
     }
 
     /// <inheritdoc />
@@ -60,7 +65,23 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
         AttachEffectiveMetadata(context, open.EffectiveMetadata);
 
         if (!open.ShouldExecute)
+        {
+            _logger.LogWarning(
+                open.Decision.State == InboxOpenState.MissingIdempotencyKey
+                    ? SquirrelBoxLogEvents.InboxMissingIdempotencyKey
+                    : SquirrelBoxLogEvents.InboxRejected,
+                "SquirrelBox rejected Pigeon message. State={State} Action={Action} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId} CorrelationId={CorrelationId} TraceId={TraceId}",
+                open.Decision.State,
+                open.Decision.Action,
+                context.Topic,
+                version,
+                context.Subscription,
+                messageContext.Operation,
+                context.MessageId,
+                context.CorrelationId,
+                open.OpenResult.EffectiveTraceId);
             return MapDecision(open.Decision);
+        }
 
         if (open.OpenResult.Entry?.ExecutionMode == InboxExecutionMode.Deferred)
         {
@@ -74,6 +95,17 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
                     SquirrelBoxPigeonMuleActionKeys.ConsumeKey,
                     envelope,
                     cancellationToken: cancellationToken);
+                _logger.LogInformation(
+                    SquirrelBoxLogEvents.PigeonConsumerDeferred,
+                    "SquirrelBox deferred Pigeon consumer execution. EntryId={EntryId} Topic={Topic} Version={Version} Subscription={Subscription} Operation={Operation} MessageId={MessageId} CorrelationId={CorrelationId} TraceId={TraceId}",
+                    open.OpenResult.Entry.Id,
+                    context.Topic,
+                    version,
+                    context.Subscription,
+                    messageContext.Operation,
+                    context.MessageId,
+                    open.OpenResult.EffectiveCorrelationId,
+                    open.OpenResult.EffectiveTraceId);
             }
             catch (Exception exception)
             {

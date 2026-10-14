@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using SquirrelBox.InMemory;
 
@@ -206,7 +207,37 @@ public sealed class InboxMessageServiceE2ETests
         AssertNoFlatIdentityMetadata(replyMetadata);
     }
 
-    private static ServiceProvider CreateProvider(bool scanProfiles = true)
+    [Fact]
+    public async Task OpenAsync_logs_warning_when_message_is_rejected_for_missing_idempotency_key()
+    {
+        var logger = new ListLogger<DefaultInboxMessageService>();
+        var provider = CreateProvider(logger: logger);
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+
+        var opened = await service.OpenAsync(new InboxMessageContext
+        {
+            Transport = "rabbitmq",
+            Topic = "orders",
+            Version = "v1",
+            Subscription = "billing",
+            Operation = "created"
+        });
+
+        Assert.False(opened.ShouldExecute);
+        Assert.Equal(InboxOpenState.MissingIdempotencyKey, opened.OpenResult.State);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.EventId == SquirrelBoxLogEvents.MessagingMetadataMissing);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.EventId == SquirrelBoxLogEvents.InboxMissingIdempotencyKey &&
+            entry.Message.Contains("State=MissingIdempotencyKey", StringComparison.Ordinal));
+    }
+
+    private static ServiceProvider CreateProvider(
+        bool scanProfiles = true,
+        ListLogger<DefaultInboxMessageService> logger = null)
     {
         var services = new ServiceCollection();
         services.AddSquirrelBox().UseInMemory();
@@ -215,6 +246,10 @@ public sealed class InboxMessageServiceE2ETests
             if (scanProfiles)
                 options.ScanAssemblyContaining<InboxMessageServiceE2ETests>();
         });
+
+        if (logger is not null)
+            services.AddSingleton<ILogger<DefaultInboxMessageService>>(logger);
+
         return services.BuildServiceProvider();
     }
 
@@ -259,6 +294,36 @@ public sealed class InboxMessageServiceE2ETests
     }
 
     private sealed record OrderMessage(string Id);
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception exception,
+            Func<TState, Exception, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, eventId, formatter(state, exception)));
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, EventId EventId, string Message);
+
+    private sealed class NullScope : IDisposable
+    {
+        public static readonly NullScope Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
 }
 
 public sealed class InboxMessageServiceTestPolicyProfile : InboxMessagePolicyProfile

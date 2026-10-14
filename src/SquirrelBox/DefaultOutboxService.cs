@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace SquirrelBox;
@@ -12,6 +14,7 @@ public sealed class DefaultOutboxService : IOutboxService
     private readonly IEnumerable<IOutboxDeferredScheduler> _schedulers;
     private readonly IEnumerable<IOutboxTransportPublisher> _publishers;
     private readonly ISquirrelBoxEventPublisher _events;
+    private readonly ILogger<DefaultOutboxService> _logger;
     private readonly IOutboxEnvelopeSerializer _serializer;
     private readonly IOutboxStore _store;
     private readonly OutboxOptions _options;
@@ -29,7 +32,8 @@ public sealed class DefaultOutboxService : IOutboxService
         IEnumerable<IOutboxDeferredScheduler> schedulers,
         IEnumerable<IOutboxTransportPublisher> publishers,
         ISquirrelBoxEventPublisher events,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<DefaultOutboxService> logger = null)
     {
         _options = options?.Value.Outbox ?? throw new ArgumentNullException(nameof(options));
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
@@ -40,6 +44,7 @@ public sealed class DefaultOutboxService : IOutboxService
         _publishers = publishers ?? throw new ArgumentNullException(nameof(publishers));
         _events = events ?? throw new ArgumentNullException(nameof(events));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _logger = logger ?? NullLogger<DefaultOutboxService>.Instance;
     }
 
     /// <inheritdoc />
@@ -58,6 +63,15 @@ public sealed class DefaultOutboxService : IOutboxService
 
         ValidateEnvelope(envelope);
         await _store.AddAsync(envelope, cancellationToken);
+        _logger.LogInformation(
+            SquirrelBoxLogEvents.OutboxEnqueued,
+            "SquirrelBox outbox enqueued envelope. EnvelopeId={EnvelopeId} Transport={Transport} Operation={Operation} Destination={Destination} CorrelationId={CorrelationId} TraceId={TraceId}",
+            envelope.Id,
+            envelope.Transport,
+            envelope.Operation,
+            envelope.Destination,
+            envelope.CorrelationId,
+            envelope.TraceId);
         await PublishEventAsync(SquirrelBoxEventNames.OutboxEnqueued, envelope, cancellationToken);
 
         var schedulers = _schedulers.ToArray();
@@ -92,6 +106,15 @@ public sealed class DefaultOutboxService : IOutboxService
             envelope.Status = OutboxStatus.Publishing;
             envelope.PublishingOnUtc = now;
             envelope.UpdatedOnUtc = now;
+            _logger.LogInformation(
+                SquirrelBoxLogEvents.OutboxPublishing,
+                "SquirrelBox outbox started publishing envelope. EnvelopeId={EnvelopeId} Transport={Transport} Operation={Operation} Destination={Destination} CorrelationId={CorrelationId} TraceId={TraceId}",
+                envelope.Id,
+                envelope.Transport,
+                envelope.Operation,
+                envelope.Destination,
+                envelope.CorrelationId,
+                envelope.TraceId);
             await PublishEventAsync(SquirrelBoxEventNames.OutboxPublishing, envelope, cancellationToken);
             await PublishEventAsync(SquirrelBoxEventNames.DeferredStarted, envelope, cancellationToken);
 
@@ -108,6 +131,15 @@ public sealed class DefaultOutboxService : IOutboxService
             envelope.Status = OutboxStatus.Published;
             envelope.PublishedOnUtc = publishedOnUtc;
             envelope.UpdatedOnUtc = publishedOnUtc;
+            _logger.LogInformation(
+                SquirrelBoxLogEvents.OutboxPublished,
+                "SquirrelBox outbox published envelope. EnvelopeId={EnvelopeId} Transport={Transport} Operation={Operation} Destination={Destination} CorrelationId={CorrelationId} TraceId={TraceId}",
+                envelope.Id,
+                envelope.Transport,
+                envelope.Operation,
+                envelope.Destination,
+                envelope.CorrelationId,
+                envelope.TraceId);
             await PublishEventAsync(SquirrelBoxEventNames.OutboxPublished, envelope, cancellationToken);
             await PublishEventAsync(SquirrelBoxEventNames.DeferredCompleted, envelope, cancellationToken);
             return OutboxPublishResult.Success;
@@ -148,6 +180,18 @@ public sealed class DefaultOutboxService : IOutboxService
         envelope.Failure = failure;
         envelope.NextAttemptOnUtc = nextAttemptOnUtc;
         envelope.UpdatedOnUtc = failedOnUtc;
+        _logger.LogError(
+            SquirrelBoxLogEvents.OutboxFailed,
+            "SquirrelBox outbox failed envelope. EnvelopeId={EnvelopeId} Transport={Transport} Operation={Operation} Destination={Destination} CorrelationId={CorrelationId} TraceId={TraceId} ErrorType={ErrorType} ErrorMessage={ErrorMessage} NextAttemptOnUtc={NextAttemptOnUtc}",
+            envelope.Id,
+            envelope.Transport,
+            envelope.Operation,
+            envelope.Destination,
+            envelope.CorrelationId,
+            envelope.TraceId,
+            failure?.ExceptionType,
+            failure?.Details,
+            envelope.NextAttemptOnUtc);
         await PublishEventAsync(SquirrelBoxEventNames.OutboxFailed, envelope, cancellationToken);
         await PublishEventAsync(SquirrelBoxEventNames.DeferredFailed, envelope, cancellationToken);
     }

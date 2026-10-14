@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 
 namespace SquirrelBox;
@@ -16,6 +18,7 @@ public sealed class DefaultInbox : IInboxService
     private readonly ITraceIdFactory _traceIdFactory;
     private readonly IAttemptIdFactory _attemptIdFactory;
     private readonly ISquirrelBoxEventPublisher _events;
+    private readonly ILogger<DefaultInbox> _logger;
     private readonly IInboxStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly IInboxTransactionRunner _transactionRunner;
@@ -36,7 +39,8 @@ public sealed class DefaultInbox : IInboxService
         ISquirrelBoxEventPublisher events,
         IInboxStore store,
         TimeProvider timeProvider,
-        IInboxTransactionRunner transactionRunner)
+        IInboxTransactionRunner transactionRunner,
+        ILogger<DefaultInbox> logger = null)
     {
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
@@ -46,6 +50,7 @@ public sealed class DefaultInbox : IInboxService
         _traceIdFactory = traceIdFactory ?? throw new ArgumentNullException(nameof(traceIdFactory));
         _attemptIdFactory = attemptIdFactory ?? throw new ArgumentNullException(nameof(attemptIdFactory));
         _events = events ?? throw new ArgumentNullException(nameof(events));
+        _logger = logger ?? NullLogger<DefaultInbox>.Instance;
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _transactionRunner = transactionRunner ?? throw new ArgumentNullException(nameof(transactionRunner));
@@ -85,7 +90,15 @@ public sealed class DefaultInbox : IInboxService
                                        policy.AllowPayloadHashAsIdempotencyKey ??
                                        _options.AllowPayloadHashAsIdempotencyKey;
             if (!allowPayloadFallback || string.IsNullOrWhiteSpace(payloadHash))
+            {
+                _logger.LogWarning(
+                    SquirrelBoxLogEvents.InboxMissingIdempotencyKey,
+                    "SquirrelBox inbox rejected operation because no idempotency key was provided or derived. Source={Source} Operation={Operation} Policy={Policy}",
+                    request.Source,
+                    request.Operation,
+                    policy.Name);
                 return new InboxOpenResult(InboxOpenState.MissingIdempotencyKey);
+            }
 
             idempotencyKey = payloadHash;
             keySource = InboxIdempotencyKeySource.ComputedFromPayload;
@@ -162,6 +175,18 @@ public sealed class DefaultInbox : IInboxService
             SetCurrent(context);
             _lastContext = context;
             _identityAccessor.Current = context.Identity;
+            _logger.LogInformation(
+                SquirrelBoxLogEvents.InboxAccepted,
+                "SquirrelBox inbox accepted operation. EntryId={EntryId} Source={Source} Operation={Operation} Policy={Policy} ExecutionMode={ExecutionMode} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId} AttemptId={AttemptId}",
+                result.Entry.Id,
+                result.Entry.Source,
+                result.Entry.Operation,
+                result.Entry.PolicyName,
+                result.Entry.ExecutionMode,
+                result.Entry.IdempotencyKey,
+                result.Entry.CorrelationId,
+                result.Entry.LastTraceId,
+                result.Entry.LastAttemptId);
             await PublishEventAsync(SquirrelBoxEventNames.InboxOpened, result.Entry, cancellationToken);
             await PublishEventAsync(SquirrelBoxEventNames.InboxAccepted, result.Entry, cancellationToken);
             return new InboxOpenResult(InboxOpenState.Opened, context);
@@ -171,6 +196,19 @@ public sealed class DefaultInbox : IInboxService
         {
             _lastContext = new InboxContext(result.Entry, request.Owner ?? _options.DefaultOwner, false, Current);
             _identityAccessor.Current = _lastContext.Identity;
+            _logger.LogWarning(
+                SquirrelBoxLogEvents.InboxRejected,
+                "SquirrelBox inbox did not accept operation. State={State} EntryId={EntryId} Source={Source} Operation={Operation} Policy={Policy} Status={Status} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId} AttemptId={AttemptId}",
+                result.State,
+                result.Entry.Id,
+                result.Entry.Source,
+                result.Entry.Operation,
+                result.Entry.PolicyName,
+                result.Entry.Status,
+                result.Entry.IdempotencyKey,
+                result.Entry.CorrelationId,
+                result.Entry.LastTraceId,
+                result.Entry.LastAttemptId);
             await PublishEventAsync(SquirrelBoxEventNames.InboxDuplicated, result.Entry, cancellationToken);
         }
 
@@ -256,6 +294,16 @@ public sealed class DefaultInbox : IInboxService
         context.Entry.Completion = resolvedCompletion;
         context.Entry.CompletedOnUtc = completedOnUtc;
         context.Entry.UpdatedOnUtc = completedOnUtc;
+        _logger.LogInformation(
+            SquirrelBoxLogEvents.InboxCompleted,
+            "SquirrelBox inbox completed operation. EntryId={EntryId} Source={Source} Operation={Operation} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId} AttemptId={AttemptId}",
+            context.Entry.Id,
+            context.Entry.Source,
+            context.Entry.Operation,
+            context.Entry.IdempotencyKey,
+            context.Entry.CorrelationId,
+            context.Entry.LastTraceId,
+            context.Entry.LastAttemptId);
         await PublishEventAsync(SquirrelBoxEventNames.InboxCompleted, context.Entry, cancellationToken);
         RestorePreviousContext(context);
     }
@@ -282,6 +330,18 @@ public sealed class DefaultInbox : IInboxService
         context.Entry.Failure = failure.Details;
         context.Entry.FailureDetails = failure;
         context.Entry.UpdatedOnUtc = failedOnUtc;
+        _logger.LogError(
+            SquirrelBoxLogEvents.InboxFailed,
+            "SquirrelBox inbox failed operation. EntryId={EntryId} Source={Source} Operation={Operation} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId} AttemptId={AttemptId} ErrorType={ErrorType} ErrorMessage={ErrorMessage}",
+            context.Entry.Id,
+            context.Entry.Source,
+            context.Entry.Operation,
+            context.Entry.IdempotencyKey,
+            context.Entry.CorrelationId,
+            context.Entry.LastTraceId,
+            context.Entry.LastAttemptId,
+            failure.ErrorType,
+            failure.ErrorMessage);
         await PublishEventAsync(SquirrelBoxEventNames.InboxFailed, context.Entry, cancellationToken);
         RestorePreviousContext(context);
     }
@@ -301,6 +361,18 @@ public sealed class DefaultInbox : IInboxService
         context.Entry.Failure = failure.Details;
         context.Entry.FailureDetails = failure;
         context.Entry.UpdatedOnUtc = retryingOnUtc;
+        _logger.LogWarning(
+            SquirrelBoxLogEvents.InboxRetrying,
+            "SquirrelBox inbox scheduled operation for retry. EntryId={EntryId} Source={Source} Operation={Operation} IdempotencyKey={IdempotencyKey} CorrelationId={CorrelationId} TraceId={TraceId} AttemptId={AttemptId} ErrorType={ErrorType} ErrorMessage={ErrorMessage}",
+            context.Entry.Id,
+            context.Entry.Source,
+            context.Entry.Operation,
+            context.Entry.IdempotencyKey,
+            context.Entry.CorrelationId,
+            context.Entry.LastTraceId,
+            context.Entry.LastAttemptId,
+            failure.ErrorType,
+            failure.ErrorMessage);
         await PublishEventAsync(SquirrelBoxEventNames.InboxRetrying, context.Entry, cancellationToken);
         RestorePreviousContext(context);
     }

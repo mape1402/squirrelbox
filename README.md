@@ -632,6 +632,7 @@ Publish:
 - Publish decision interceptor persists Pigeon's prepared `PigeonPublishEnvelope` in SquirrelBox Outbox.
 - Pigeon publish is skipped inline after the envelope is durable.
 - Outgoing Pigeon envelopes are enriched with a single `SquirrelBoxMetadata` section when a current inbox identity exists.
+- Durable Pigeon outbox replay also verifies the serialized `WrappedPayload<T>.Metadata` body and repairs it before publishing when the durable envelope has `SquirrelBoxMetadata` but the body does not.
 - Mule later publishes through `IPigeonPublisherInvoker` without rerunning producer interceptors, publish decision interceptors, or Pigeon's internal outbox logic.
 - Normal and raw publish flows are supported.
 
@@ -648,6 +649,43 @@ services.AddMule(mule => mule
 ```
 
 SquirrelBox attaches durable metadata such as `squirrelbox-inbox-id`, `squirrelbox-outbox-id`, retry policy metadata, and the structured `SquirrelBoxMetadata` section. When an inbox policy configures deferred retries, `AddSquirrelBoxMule()` creates or updates the Mule lane retry policy automatically. User Mule configuration can still override lane behavior by configuring the same lane after SquirrelBox registration.
+
+## Observability
+
+SquirrelBox uses `Microsoft.Extensions.Logging` and emits structured logs from the core inbox,
+outbox, messaging, and Pigeon adapters. No payload bodies are logged by default.
+
+Useful categories:
+
+```text
+SquirrelBox.DefaultInbox
+SquirrelBox.DefaultOutboxService
+SquirrelBox.Messaging.DefaultInboxMessageService
+SquirrelBox.Messaging.Pigeon.SquirrelBoxPigeonDecisionInterceptor
+SquirrelBox.Messaging.Pigeon.SquirrelBoxPigeonOutboxInterceptor
+SquirrelBox.Messaging.Pigeon.SquirrelBoxPigeonOutboxPublisher
+```
+
+Example `appsettings.json`:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "SquirrelBox": "Information",
+      "SquirrelBox.Messaging": "Information",
+      "SquirrelBox.Messaging.Pigeon": "Information"
+    }
+  }
+}
+```
+
+Warnings are emitted for rejected inbox decisions such as `MissingIdempotencyKey`,
+`PayloadConflict`, expired entries, missing messaging metadata, and Pigeon wrapped payload
+metadata repairs. Errors are emitted when inbox execution or outbox publication fails.
+Every log includes operational metadata such as entry/envelope ids, operation, transport,
+topic/version/subscription, idempotency key, correlation id, trace id, and attempt id when
+available.
 
 ## Sample
 
