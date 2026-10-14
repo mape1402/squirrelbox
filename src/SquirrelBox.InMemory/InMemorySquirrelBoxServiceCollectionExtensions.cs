@@ -26,6 +26,8 @@ public static class InMemorySquirrelBoxServiceCollectionExtensions
         services.TryAddSingleton<InMemoryInboxStore>();
         services.AddSingleton<IInboxStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
         services.AddSingleton<IInboxDiagnosticsStore>(provider => provider.GetRequiredService<InMemoryInboxStore>());
-        services.AddSingleton<IOutboxStore, InMemoryOutboxStore>();
+        services.TryAddSingleton<InMemoryOutboxStore>();
+        services.AddSingleton<IOutboxStore>(provider => provider.GetRequiredService<InMemoryOutboxStore>());
+        services.AddSingleton<IOutboxAttemptDiagnosticsStore>(provider => provider.GetRequiredService<InMemoryOutboxStore>());
     }
 }
