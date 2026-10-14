@@ -52,6 +52,103 @@ public sealed class SquirrelBoxOperationServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_replays_completed_operation_without_executing_again()
+    {
+        using var provider = CreateProvider();
+
+        using var firstScope = provider.CreateScope();
+        var first = await firstScope.ServiceProvider
+            .GetRequiredService<ISquirrelBoxOperationService>()
+            .ExecuteAsync<CreateOrderOperation, CreateOrderRequest, CreateOrderResult>(
+                new CreateOrderRequest("order-replay"),
+                CancellationToken.None);
+
+        using var secondScope = provider.CreateScope();
+        var second = await secondScope.ServiceProvider
+            .GetRequiredService<ISquirrelBoxOperationService>()
+            .ExecuteAsync<CreateOrderOperation, CreateOrderRequest, CreateOrderResult>(
+                new CreateOrderRequest("order-replay"),
+                CancellationToken.None);
+
+        Assert.True(first.Executed);
+        Assert.Equal(SquirrelBoxOperationExecutionState.Replayed, second.State);
+        Assert.Equal("created:order-replay", second.Result.Value);
+        Assert.Single(provider.GetRequiredService<OrderProbe>().Requests);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_marks_entry_failed_when_inline_operation_throws()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ExecuteAsync<FailingOrderOperation, FailingOrderRequest, CreateOrderResult>(
+                new FailingOrderRequest("order-fails"),
+                CancellationToken.None).AsTask());
+
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        Assert.Equal(InboxStatus.Failed, inbox.LastContext.Entry.Status);
+        Assert.Equal("operation failed", inbox.LastContext.Entry.FailureDetails.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_marks_entry_failed_when_deferred_scheduler_throws()
+    {
+        using var provider = CreateProvider(options => options.DefaultExecutionMode = InboxExecutionMode.Deferred);
+        using var scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<FakeOperationScheduler>().ExceptionToThrow =
+            new InvalidOperationException("scheduler failed");
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, CreateOrderResult>(
+                new CreateOrderRequest("order-scheduler-fails"),
+                CancellationToken.None).AsTask());
+
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        Assert.Equal(InboxStatus.Failed, inbox.LastContext.Entry.Status);
+        Assert.Equal("scheduler failed", inbox.LastContext.Entry.FailureDetails.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_fails_deferred_operation_when_scheduler_is_missing()
+    {
+        using var provider = CreateProvider(
+            options => options.DefaultExecutionMode = InboxExecutionMode.Deferred,
+            registerScheduler: false);
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, CreateOrderResult>(
+                new CreateOrderRequest("order-no-scheduler"),
+                CancellationToken.None).AsTask());
+
+        Assert.Equal(InboxStatus.Failed, scope.ServiceProvider.GetRequiredService<IInboxService>().LastContext.Entry.Status);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_completes_with_empty_completion_when_operation_returns_null()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider
+            .GetRequiredService<ISquirrelBoxOperationService>()
+            .ExecuteAsync<NullOrderOperation, NullOrderRequest, CreateOrderResult>(
+                new NullOrderRequest("order-null"),
+                CancellationToken.None);
+
+        var entry = await scope.ServiceProvider.GetRequiredService<IInboxService>().GetAsync(result.Context.Entry.Id);
+
+        Assert.True(result.Executed);
+        Assert.Null(result.Result);
+        Assert.Null(entry.Completion.ResultPayload);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_can_discover_unique_operation_by_request_and_result()
     {
         using var provider = CreateProvider(options => options.ScanAssemblyContaining<CreateOrderOperation>());
@@ -94,21 +191,48 @@ public sealed class SquirrelBoxOperationServiceTests
         Assert.Equal(opened.Entry.Id, inbox.Current.Entry.Id);
     }
 
+    [Fact]
+    public async Task ContinueAsync_rejects_unresolvable_envelope_types()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<ISquirrelBoxOperationService>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ContinueAsync(new SquirrelBoxOperationEnvelope
+            {
+                OperationType = "missing.operation",
+                RequestType = typeof(CreateOrderRequest).AssemblyQualifiedName,
+                ResultType = typeof(CreateOrderResult).AssemblyQualifiedName,
+                RequestJson = "{}"
+            }).AsTask());
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private static ServiceProvider CreateProvider(Action<SquirrelBoxOptions> configure = null)
+    private static ServiceProvider CreateProvider(
+        Action<SquirrelBoxOptions> configure = null,
+        bool registerScheduler = true)
     {
         var services = new ServiceCollection();
         var scheduler = new FakeOperationScheduler();
         services.AddSingleton<OrderProbe>();
         services.AddSingleton(scheduler);
         services.AddScoped<CreateOrderOperation>();
+        services.AddScoped<FailingOrderOperation>();
+        services.AddScoped<NullOrderOperation>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ISquirrelBoxOperationDeferredScheduler>(scheduler));
+        if (!registerScheduler)
+            services.RemoveAll<ISquirrelBoxOperationDeferredScheduler>();
         services.AddSquirrelBox(configure).UseInMemory();
         return services.BuildServiceProvider();
     }
 
     private sealed record CreateOrderRequest(string Id);
+
+    private sealed record FailingOrderRequest(string Id);
+
+    private sealed record NullOrderRequest(string Id);
 
     private sealed record CreateOrderResult(string Value);
 
@@ -124,6 +248,24 @@ public sealed class SquirrelBoxOperationServiceTests
         }
     }
 
+    private sealed class FailingOrderOperation : SquirrelBoxOperation<FailingOrderRequest, CreateOrderResult>
+    {
+        protected override ValueTask<CreateOrderResult> ExecuteAsync(
+            FailingOrderRequest request,
+            SquirrelBoxOperationContext context,
+            CancellationToken cancellationToken)
+            => throw new InvalidOperationException("operation failed");
+    }
+
+    private sealed class NullOrderOperation : SquirrelBoxOperation<NullOrderRequest, CreateOrderResult>
+    {
+        protected override ValueTask<CreateOrderResult> ExecuteAsync(
+            NullOrderRequest request,
+            SquirrelBoxOperationContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult<CreateOrderResult>(null);
+    }
+
     private sealed class OrderProbe
     {
         public List<string> Requests { get; } = [];
@@ -133,11 +275,16 @@ public sealed class SquirrelBoxOperationServiceTests
     {
         public List<SquirrelBoxOperationEnvelope> Envelopes { get; } = [];
 
+        public Exception ExceptionToThrow { get; set; }
+
         public ValueTask ScheduleAsync(
             InboxContext context,
             SquirrelBoxOperationEnvelope envelope,
             CancellationToken cancellationToken = default)
         {
+            if (ExceptionToThrow is not null)
+                throw ExceptionToThrow;
+
             Envelopes.Add(envelope);
             return ValueTask.CompletedTask;
         }
