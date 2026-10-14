@@ -93,7 +93,7 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
         {
             return Ulid.Parse(rawEntryId);
         }
-        catch (FormatException exception)
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
         {
             throw new InvalidOperationException(
                 $"Mule action metadata '{SquirrelBoxMuleMetadata.InboxEntryId}' is not a valid ULID.",

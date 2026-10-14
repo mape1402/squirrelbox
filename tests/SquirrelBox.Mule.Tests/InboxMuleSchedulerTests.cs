@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Mule;
 using Mule.InMemory;
 using NSubstitute;
@@ -113,6 +114,127 @@ public sealed class InboxMuleSchedulerTests
     }
 
     [Fact]
+    public async Task EnqueueCurrentAsync_resolves_max_attempts_from_mule_lane_retry_policy()
+    {
+        var mule = Substitute.For<IMuleClient>();
+        EnqueueOptions capturedOptions = null;
+        mule.EnqueueAsync(
+                Arg.Any<ActionKey>(),
+                Arg.Any<DeferredPayload>(),
+                Arg.Do<Action<EnqueueOptions>>(configure =>
+                {
+                    capturedOptions = new EnqueueOptions();
+                    configure(capturedOptions);
+                }),
+                Arg.Any<CancellationToken>())
+            .Returns(new Guid("33333333-3333-3333-3333-333333333333"));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mule);
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.Lanes["orders"] = new MuleLaneSettings
+            {
+                RetryPolicy = new MuleRetryPolicy { MaxAttempts = 8 }
+            };
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.AddInboxPolicy("orders-deferred", policy =>
+            {
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.Delay = TimeSpan.FromSeconds(1);
+            });
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                "order-lane-retry",
+                new DeferredPayload("order-lane-retry"),
+                policyName: "orders-deferred"));
+
+        await scope.ServiceProvider.GetRequiredService<IInboxMuleScheduler>()
+            .EnqueueCurrentAsync(Key, new DeferredPayload("order-lane-retry"));
+
+        Assert.Equal("8", capturedOptions.Metadata[SquirrelBoxMuleMetadata.DeferredMaxAttempts]);
+    }
+
+    [Fact]
+    public async Task EnqueueCurrentAsync_resolves_max_attempts_from_legacy_lane_or_global_retry_policy()
+    {
+        var legacyOptions = await EnqueueWithDirectSchedulerSettingsAsync(
+            settings => settings.Lanes["legacy"] = new MuleLaneSettings { MaxAttempts = 5 },
+            options => options.AddInboxPolicy("legacy", policy =>
+            {
+                policy.Deferred.Lane = "legacy";
+                policy.Deferred.Delay = TimeSpan.FromSeconds(1);
+            }),
+            "legacy",
+            "order-legacy-lane");
+        var globalOptions = await EnqueueWithDirectSchedulerSettingsAsync(
+            settings => settings.RetryPolicy = new MuleRetryPolicy { MaxAttempts = 6 },
+            options => options.AddInboxPolicy("global", policy =>
+            {
+                policy.Deferred.Lane = "global";
+                policy.Deferred.Delay = TimeSpan.FromSeconds(1);
+            }),
+            "global",
+            "order-global-lane");
+
+        Assert.Equal("5", legacyOptions.Metadata[SquirrelBoxMuleMetadata.DeferredMaxAttempts]);
+        Assert.Equal("6", globalOptions.Metadata[SquirrelBoxMuleMetadata.DeferredMaxAttempts]);
+    }
+
+    private static async Task<EnqueueOptions> EnqueueWithDirectSchedulerSettingsAsync(
+        Action<MuleSettings> configureMule,
+        Action<SquirrelBoxOptions> configureSquirrelBox,
+        string policyName,
+        string id)
+    {
+        var mule = Substitute.For<IMuleClient>();
+        EnqueueOptions capturedOptions = null;
+        mule.EnqueueAsync(
+                Arg.Any<ActionKey>(),
+                Arg.Any<DeferredPayload>(),
+                Arg.Do<Action<EnqueueOptions>>(configure =>
+                {
+                    capturedOptions = new EnqueueOptions();
+                    configure(capturedOptions);
+                }),
+                Arg.Any<CancellationToken>())
+            .Returns(new Guid("44444444-4444-4444-4444-444444444444"));
+
+        var muleSettings = new MuleSettings();
+        configureMule(muleSettings);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mule);
+        services.AddSquirrelBox(configureSquirrelBox).UseInMemory();
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        await inbox
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                id,
+                new DeferredPayload(id),
+                policyName: policyName));
+        var scheduler = new InboxMuleScheduler(
+            inbox,
+            mule,
+            Options.Create(muleSettings));
+
+        await scheduler.EnqueueCurrentAsync(Key, new DeferredPayload(id));
+
+        return capturedOptions;
+    }
+
+    [Fact]
     public async Task SquirrelBoxMuleAction_continues_context_and_completes_inbox_entry()
     {
         using var provider = CreateServiceProvider();
@@ -165,6 +287,31 @@ public sealed class InboxMuleSchedulerTests
 
         Assert.Equal(InboxStatus.Failed, entry.Status);
         Assert.Equal("planned failure", entry.FailureDetails.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task SquirrelBoxMuleAction_rejects_missing_or_invalid_inbox_entry_metadata()
+    {
+        using var provider = CreateServiceProvider();
+        using var scope = provider.CreateScope();
+        var action = new CaptureDeferredPayloadAction(
+            scope.ServiceProvider.GetRequiredService<IInboxService>(),
+            scope.ServiceProvider.GetRequiredService<DeferredProbe>());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            action.ExecuteAsync(
+                CreateMuleContext(scope.ServiceProvider, new DeferredPayload("missing"), new Dictionary<string, string>()),
+                CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            action.ExecuteAsync(
+                CreateMuleContext(
+                    scope.ServiceProvider,
+                    new DeferredPayload("invalid"),
+                    new Dictionary<string, string>
+                    {
+                        [SquirrelBoxMuleMetadata.InboxEntryId] = "not-a-ulid"
+                    }),
+                CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -321,6 +468,175 @@ public sealed class InboxMuleSchedulerTests
         Assert.True(probe.AttemptCount("order-terminal-hosted") >= 2);
     }
 
+    [Fact]
+    public void AddSquirrelBoxMule_configures_default_policy_retry_lane_from_global_retry_policy()
+    {
+        var services = new ServiceCollection();
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.RetryPolicy = new MuleRetryPolicy
+            {
+                MaxAttempts = 5,
+                Delay = TimeSpan.FromSeconds(2),
+                MaxDelay = TimeSpan.FromSeconds(10),
+                Backoff = MuleRetryBackoff.Linear,
+                JitterRatio = 0.15
+            };
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.DefaultInboxPolicy.Deferred.Backoff = InboxRetryBackoff.Exponential;
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        var settings = provider.GetRequiredService<IOptions<MuleSettings>>().Value;
+        var retry = settings.Lanes["squirrelbox.default"].RetryPolicy;
+
+        Assert.Equal(5, retry.MaxAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(2), retry.Delay);
+        Assert.Equal(TimeSpan.FromSeconds(10), retry.MaxDelay);
+        Assert.Equal(MuleRetryBackoff.Exponential, retry.Backoff);
+        Assert.Equal(0.15, retry.JitterRatio);
+    }
+
+    [Fact]
+    public void AddSquirrelBoxMule_preserves_existing_lane_retry_policy_when_policy_omits_values()
+    {
+        var services = new ServiceCollection();
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.Lanes["orders"] = new MuleLaneSettings
+            {
+                RetryPolicy = new MuleRetryPolicy
+                {
+                    MaxAttempts = 4,
+                    Delay = TimeSpan.FromMilliseconds(250),
+                    MaxDelay = TimeSpan.FromSeconds(5),
+                    Backoff = MuleRetryBackoff.Linear,
+                    JitterRatio = 0.2
+                }
+            };
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.AddInboxPolicy("orders", policy =>
+            {
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.JitterRatio = 0.35;
+            });
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        var retry = provider.GetRequiredService<IOptions<MuleSettings>>().Value.Lanes["orders"].RetryPolicy;
+
+        Assert.Equal(4, retry.MaxAttempts);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), retry.Delay);
+        Assert.Equal(TimeSpan.FromSeconds(5), retry.MaxDelay);
+        Assert.Equal(MuleRetryBackoff.Linear, retry.Backoff);
+        Assert.Equal(0.35, retry.JitterRatio);
+    }
+
+    [Fact]
+    public void AddSquirrelBoxMule_uses_legacy_lane_values_when_retry_policy_is_missing()
+    {
+        var services = new ServiceCollection();
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.Lanes["legacy"] = new MuleLaneSettings
+            {
+                MaxAttempts = 3,
+                RetryDelay = TimeSpan.FromMilliseconds(500)
+            };
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.AddInboxPolicy("legacy", policy =>
+            {
+                policy.Deferred.Lane = "legacy";
+                policy.Deferred.JitterRatio = 0.1;
+            });
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        var retry = provider.GetRequiredService<IOptions<MuleSettings>>().Value.Lanes["legacy"].RetryPolicy;
+
+        Assert.Equal(3, retry.MaxAttempts);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), retry.Delay);
+        Assert.Equal(MuleRetryBackoff.Fixed, retry.Backoff);
+        Assert.Equal(0.1, retry.JitterRatio);
+    }
+
+    [Fact]
+    public void AddSquirrelBoxMule_skips_retry_configuration_when_policy_has_no_lane_or_name()
+    {
+        var services = new ServiceCollection();
+        services.AddSquirrelBox(options =>
+        {
+            options.DefaultInboxPolicy.Name = " ";
+            options.DefaultInboxPolicy.Deferred.MaxAttempts = 2;
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Empty(provider.GetRequiredService<IOptions<MuleSettings>>().Value.Lanes);
+    }
+
+    [Fact]
+    public void AddSquirrelBoxMule_uses_global_legacy_attempts_and_exponential_backoff()
+    {
+        var services = new ServiceCollection();
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.MaxAttempts = 7;
+            settings.RetryPolicy = new MuleRetryPolicy
+            {
+                Backoff = MuleRetryBackoff.Exponential
+            };
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.AddInboxPolicy("orders", policy =>
+            {
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.Delay = TimeSpan.FromMilliseconds(50);
+            });
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        var retry = provider.GetRequiredService<IOptions<MuleSettings>>().Value.Lanes["orders"].RetryPolicy;
+
+        Assert.Equal(10, retry.MaxAttempts);
+        Assert.Equal(MuleRetryBackoff.Exponential, retry.Backoff);
+    }
+
+    [Fact]
+    public void AddSquirrelBoxMule_uses_global_legacy_attempts_when_retry_policy_is_missing()
+    {
+        var services = new ServiceCollection();
+        services.Configure<MuleSettings>(settings =>
+        {
+            settings.MaxAttempts = 7;
+        });
+        services.AddSquirrelBox(options =>
+        {
+            options.AddInboxPolicy("orders", policy =>
+            {
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.Delay = TimeSpan.FromMilliseconds(50);
+            });
+        }).UseInMemory();
+        services.AddSquirrelBoxMule();
+        using var provider = services.BuildServiceProvider();
+
+        var retry = provider.GetRequiredService<IOptions<MuleSettings>>().Value.Lanes["orders"].RetryPolicy;
+
+        Assert.Equal(7, retry.MaxAttempts);
+    }
+
     private static ServiceProvider CreateServiceProvider()
     {
         var services = new ServiceCollection();
@@ -460,6 +776,20 @@ public sealed class InboxMuleSchedulerTests
         {
             Key = Key,
             Attempts = attempts,
+            Metadata = JsonSerializer.Serialize(metadata)
+        };
+
+        return new MuleActionContext<DeferredPayload>(action, services, payload);
+    }
+
+    private static MuleActionContext<DeferredPayload> CreateMuleContext(
+        IServiceProvider services,
+        DeferredPayload payload,
+        IDictionary<string, string> metadata)
+    {
+        var action = new DurableAction
+        {
+            Key = Key,
             Metadata = JsonSerializer.Serialize(metadata)
         };
 

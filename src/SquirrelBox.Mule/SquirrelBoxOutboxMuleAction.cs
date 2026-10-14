@@ -46,7 +46,7 @@ public sealed class SquirrelBoxOutboxMuleAction : IMuleAction<SquirrelBoxOutboxE
         {
             return Ulid.Parse(rawEnvelopeId);
         }
-        catch (FormatException exception)
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
         {
             throw new InvalidOperationException(
                 $"SquirrelBox outbox envelope id '{rawEnvelopeId}' is not a valid ULID.",
