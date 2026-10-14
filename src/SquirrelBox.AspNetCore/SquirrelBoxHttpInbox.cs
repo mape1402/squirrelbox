@@ -9,16 +9,16 @@ internal static class SquirrelBoxHttpInbox
     private static readonly object IdentityHeadersRegistrationKey = new();
     private static readonly object SuppressCompletionKey = new();
 
-    public static bool HasPayloadMetadata(HttpContext httpContext)
+    public static bool HasInboxMetadata(HttpContext httpContext)
     {
         var endpoint = httpContext.GetEndpoint();
-        if (endpoint?.Metadata.GetMetadata<ISquirrelBoxPayloadMetadata>() is not null)
+        if (endpoint?.Metadata.GetMetadata<ISquirrelBoxInboxMetadata>() is not null)
             return true;
 
         var action = endpoint?.Metadata.GetMetadata<ControllerActionDescriptor>();
         return action is not null &&
-               (action.EndpointMetadata.OfType<ISquirrelBoxPayloadMetadata>().Any() ||
-                action.FilterDescriptors.Any(descriptor => descriptor.Filter is ISquirrelBoxPayloadMetadata));
+               (action.EndpointMetadata.OfType<ISquirrelBoxInboxMetadata>().Any() ||
+                action.FilterDescriptors.Any(descriptor => descriptor.Filter is ISquirrelBoxInboxMetadata));
     }
 
     public static void EnsureIdentityHeadersOnStarting(
@@ -65,7 +65,7 @@ internal static class SquirrelBoxHttpInbox
         string source = null,
         string owner = null,
         InboxExecutionMode? executionMode = null,
-        ISquirrelBoxPayloadMetadata payloadMetadata = null)
+        ISquirrelBoxInboxMetadata inboxMetadata = null)
     {
         var idempotencyKey = ResolveRequestHeader(httpContext, options.RequestHeaderNames);
         var correlationId = ResolveRequestHeader(httpContext, options.CorrelationIdHeaderNames);
@@ -85,11 +85,11 @@ internal static class SquirrelBoxHttpInbox
             TraceIdName = traceId.Name,
             AttemptIdName = ResolveDefaultName(options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),
             Owner = owner ?? options.Owner,
-            ExecutionMode = payloadMetadata?.ExecutionMode ?? executionMode ?? options.ExecutionModeResolver(httpContext),
-            PolicyName = payloadMetadata?.PolicyName,
-            EntryLifetime = payloadMetadata?.EntryLifetime,
-            CompletedLock = payloadMetadata?.CompletedLock ?? InboxCompletedLockMode.Default,
-            Deferred = payloadMetadata?.Deferred
+            ExecutionMode = inboxMetadata?.ExecutionMode ?? executionMode ?? options.ExecutionModeResolver(httpContext),
+            PolicyName = inboxMetadata?.PolicyName,
+            EntryLifetime = inboxMetadata?.EntryLifetime,
+            CompletedLock = inboxMetadata?.CompletedLock ?? InboxCompletedLockMode.Default,
+            Deferred = inboxMetadata?.Deferred
         };
     }
 

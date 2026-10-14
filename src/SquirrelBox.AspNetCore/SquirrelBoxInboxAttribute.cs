@@ -9,13 +9,13 @@ namespace SquirrelBox.AspNetCore;
 /// Opens or continues a SquirrelBox inbox context from a bound MVC action payload.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
-public sealed class SquirrelBoxPayloadAttribute : Attribute, IAsyncActionFilter, ISquirrelBoxPayloadMetadata
+public sealed class SquirrelBoxInboxAttribute : Attribute, IAsyncActionFilter, ISquirrelBoxInboxMetadata
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="SquirrelBoxPayloadAttribute"/> class.
+    /// Initializes a new instance of the <see cref="SquirrelBoxInboxAttribute"/> class.
     /// </summary>
     /// <param name="argumentName">The action argument name that contains the payload.</param>
-    public SquirrelBoxPayloadAttribute(string argumentName = "request")
+    public SquirrelBoxInboxAttribute(string argumentName = "request")
     {
         ArgumentName = string.IsNullOrWhiteSpace(argumentName) ? "request" : argumentName;
     }
@@ -128,7 +128,7 @@ public sealed class SquirrelBoxPayloadAttribute : Attribute, IAsyncActionFilter,
         }
 
         var services = context.HttpContext.RequestServices;
-        var accepted = await SquirrelBoxPayloadFilterExecutor.TryAcceptAsync(
+        var accepted = await SquirrelBoxInboxEndpointFilterExecutor.TryAcceptAsync(
             context.HttpContext,
             payload,
             this,

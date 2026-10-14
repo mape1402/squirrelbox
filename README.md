@@ -333,8 +333,8 @@ app.UseSquirrelBox();
 ```
 
 `UseSquirrelBox()` is not a global idempotency switch. A request is protected only when the
-endpoint explicitly opens SquirrelBox, for example with `[SquirrelBoxPayload]`,
-`.WithSquirrelBoxPayload()`, or `HttpContext.OpenSquirrelBoxAsync(...)`. Sending an
+endpoint explicitly opens SquirrelBox, for example with `[SquirrelBoxInbox]`,
+`.WithSquirrelBoxInbox()`, or `HttpContext.OpenSquirrelBoxAsync(...)`. Sending an
 `Idempotency-Key` header to an unmarked endpoint does not activate inbox protection.
 
 HTTP responses include the effective idempotency key, correlation id, attempt id, and trace id.
@@ -342,11 +342,11 @@ When the request uses a configured alternate header such as `X-Idempotency-Key` 
 `X-Correlation-Id`, SquirrelBox propagates the same header name back. Computed keys use the
 configured default response/request header name.
 
-For MVC controllers, add `[SquirrelBoxPayload]` to the action that receives the bound DTO:
+For MVC controllers, add `[SquirrelBoxInbox]` to the action that receives the bound DTO:
 
 ```csharp
 [HttpPost("orders")]
-[SquirrelBoxPayload]
+[SquirrelBoxInbox]
 public async Task<ActionResult> Create(CreateOrderRequest request, CancellationToken cancellationToken)
 {
     var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
@@ -360,12 +360,12 @@ public async Task<ActionResult> Create(CreateOrderRequest request, CancellationT
 ```
 
 The attribute is method-only and reads the `request` action argument by default. Use
-`[SquirrelBoxPayload("payload")]` when the DTO parameter has a different name. The same
+`[SquirrelBoxInbox("payload")]` when the DTO parameter has a different name. The same
 attribute can select a named policy, entrypoint TTL, or completed-lock behavior:
 
 ```csharp
 [HttpPost("payments")]
-[SquirrelBoxPayload(TtlSeconds = 86_400, CompletedLock = InboxCompletedLockMode.Forever)]
+[SquirrelBoxInbox(TtlSeconds = 86_400, CompletedLock = InboxCompletedLockMode.Forever)]
 public async Task<ActionResult> CreatePayment(CreatePaymentRequest request)
 {
     // ...
@@ -376,7 +376,7 @@ MVC actions can also declare deferred entrypoint settings directly:
 
 ```csharp
 [HttpPost("orders/deferred")]
-[SquirrelBoxPayload(
+[SquirrelBoxInbox(
     Policy = "orders-deferred",
     DeferExecution = true,
     DeferredLane = "orders-deferred",
@@ -412,27 +412,27 @@ app.MapPost("/orders/computed-key", async (
         ? Results.Created($"/orders/{result.Result.Id}", result.Result)
         : Results.Conflict(result.Decision);
 })
-.WithSquirrelBoxPayload();
+.WithSquirrelBoxInbox();
 ```
 
 Minimal APIs can configure the same policy data inline:
 
 ```csharp
 app.MapPost("/orders/window", HandleOrder)
-   .WithSquirrelBoxPayload(options =>
+   .WithSquirrelBoxInbox(options =>
    {
        options.EntryLifetime = TimeSpan.FromMinutes(30);
    });
 
 app.MapPost("/payments", HandlePayment)
-   .WithSquirrelBoxPayload(options =>
+   .WithSquirrelBoxInbox(options =>
    {
        options.PolicyName = "payments";
        options.CompletedLock = InboxCompletedLockMode.Forever;
    });
 
 app.MapPost("/orders/deferred", HandleDeferredOrder)
-   .WithSquirrelBoxPayload(options =>
+   .WithSquirrelBoxInbox(options =>
    {
        options.PolicyName = "orders-deferred";
        options.ExecutionMode = InboxExecutionMode.Deferred;

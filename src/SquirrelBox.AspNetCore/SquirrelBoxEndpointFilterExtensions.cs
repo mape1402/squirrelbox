@@ -16,10 +16,10 @@ public static class SquirrelBoxEndpointFilterExtensions
     /// <param name="builder">The route handler builder.</param>
     /// <param name="argumentName">The endpoint argument name that contains the payload.</param>
     /// <returns>The same route handler builder for fluent configuration.</returns>
-    public static RouteHandlerBuilder WithSquirrelBoxPayload(
+    public static RouteHandlerBuilder WithSquirrelBoxInbox(
         this RouteHandlerBuilder builder,
         string argumentName = "request")
-        => builder.WithSquirrelBoxPayload(argumentName, configure: null);
+        => builder.WithSquirrelBoxInbox(argumentName, configure: null);
 
     /// <summary>
     /// Opens or continues a SquirrelBox inbox context from a bound Minimal API endpoint argument.
@@ -27,10 +27,10 @@ public static class SquirrelBoxEndpointFilterExtensions
     /// <param name="builder">The route handler builder.</param>
     /// <param name="configure">The endpoint inbox configuration callback.</param>
     /// <returns>The same route handler builder for fluent configuration.</returns>
-    public static RouteHandlerBuilder WithSquirrelBoxPayload(
+    public static RouteHandlerBuilder WithSquirrelBoxInbox(
         this RouteHandlerBuilder builder,
-        Action<SquirrelBoxPayloadOptions> configure)
-        => builder.WithSquirrelBoxPayload("request", configure);
+        Action<SquirrelBoxInboxEndpointOptions> configure)
+        => builder.WithSquirrelBoxInbox("request", configure);
 
     /// <summary>
     /// Opens or continues a SquirrelBox inbox context from a bound Minimal API endpoint argument.
@@ -39,18 +39,18 @@ public static class SquirrelBoxEndpointFilterExtensions
     /// <param name="argumentName">The endpoint argument name that contains the payload.</param>
     /// <param name="configure">The endpoint inbox configuration callback.</param>
     /// <returns>The same route handler builder for fluent configuration.</returns>
-    public static RouteHandlerBuilder WithSquirrelBoxPayload(
+    public static RouteHandlerBuilder WithSquirrelBoxInbox(
         this RouteHandlerBuilder builder,
         string argumentName,
-        Action<SquirrelBoxPayloadOptions> configure)
+        Action<SquirrelBoxInboxEndpointOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var payloadOptions = new SquirrelBoxPayloadOptions
+        var payloadOptions = new SquirrelBoxInboxEndpointOptions
         {
             ArgumentName = string.IsNullOrWhiteSpace(argumentName) ? "request" : argumentName
         };
         configure?.Invoke(payloadOptions);
-        var metadata = new SquirrelBoxPayloadEndpointMetadata(payloadOptions);
+        var metadata = new SquirrelBoxInboxEndpointMetadata(payloadOptions);
 
         builder.WithMetadata(metadata);
         builder.AddEndpointFilterFactory((factoryContext, next) =>
@@ -67,7 +67,7 @@ public static class SquirrelBoxEndpointFilterExtensions
                 }
 
                 var services = invocationContext.HttpContext.RequestServices;
-                var accepted = await SquirrelBoxPayloadFilterExecutor.TryAcceptAsync(
+                var accepted = await SquirrelBoxInboxEndpointFilterExecutor.TryAcceptAsync(
                     invocationContext.HttpContext,
                     payload,
                     metadata,

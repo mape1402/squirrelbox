@@ -29,7 +29,7 @@ public static class SquirrelBoxHttpContextExtensions
         string operation = null,
         string source = null,
         InboxExecutionMode? executionMode = null,
-        Action<SquirrelBoxPayloadOptions> configure = null,
+        Action<SquirrelBoxInboxEndpointOptions> configure = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(httpContext);
@@ -38,8 +38,8 @@ public static class SquirrelBoxHttpContextExtensions
         var options = httpContext.RequestServices
             .GetService<IOptions<SquirrelBoxAspNetCoreOptions>>()?.Value
             ?? new SquirrelBoxAspNetCoreOptions();
-        var payloadOptions = new SquirrelBoxPayloadOptions();
-        configure?.Invoke(payloadOptions);
+        var inboxOptions = new SquirrelBoxInboxEndpointOptions();
+        configure?.Invoke(inboxOptions);
 
         SquirrelBoxHttpInbox.EnsureIdentityHeadersOnStarting(httpContext, inbox, options);
 
@@ -51,7 +51,7 @@ public static class SquirrelBoxHttpContextExtensions
                 operation,
                 source,
                 executionMode: executionMode,
-                payloadMetadata: new SquirrelBoxPayloadEndpointMetadata(payloadOptions)),
+                inboxMetadata: new SquirrelBoxInboxEndpointMetadata(inboxOptions)),
             cancellationToken);
     }
 }
