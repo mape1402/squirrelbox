@@ -30,7 +30,7 @@ public sealed class SquirrelBoxOutboxMuleAction : IMuleAction<SquirrelBoxOutboxE
         await _outbox.PublishAsync(envelopeId, cancellationToken);
     }
 
-    private static Ulid ResolveEnvelopeId(MuleActionContext<SquirrelBoxOutboxEnvelopeReference> context)
+    private static global::System.Ulid ResolveEnvelopeId(MuleActionContext<SquirrelBoxOutboxEnvelopeReference> context)
     {
         var rawEnvelopeId = context.Payload?.EnvelopeId;
         if (string.IsNullOrWhiteSpace(rawEnvelopeId) &&
@@ -44,7 +44,7 @@ public sealed class SquirrelBoxOutboxMuleAction : IMuleAction<SquirrelBoxOutboxE
 
         try
         {
-            return Ulid.Parse(rawEnvelopeId);
+            return global::System.Ulid.Parse(rawEnvelopeId);
         }
         catch (Exception exception) when (exception is FormatException or ArgumentException)
         {

@@ -13,6 +13,7 @@ using SquirrelBox.InMemory;
 using SquirrelBox.Messaging;
 using SquirrelBox.Messaging.Pigeon;
 using SquirrelBox.Mule;
+using Ulid = System.Ulid;
 
 var builder = WebApplication.CreateBuilder(args);
 

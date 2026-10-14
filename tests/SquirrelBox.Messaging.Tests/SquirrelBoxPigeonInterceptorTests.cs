@@ -8,6 +8,7 @@ using Pigeon.Messaging.Contracts;
 using SquirrelBox.InMemory;
 using SquirrelBox.Messaging.Pigeon;
 using SquirrelBox.Mule;
+using Ulid = System.Ulid;
 
 namespace SquirrelBox.Messaging.Tests;
 
@@ -724,7 +725,7 @@ public sealed class SquirrelBoxPigeonInterceptorTests
 
         public Exception ExceptionToThrow { get; set; }
 
-        public ValueTask<Guid> EnqueueCurrentAsync<TPayload>(
+        public ValueTask<global::Mule.Ulid> EnqueueCurrentAsync<TPayload>(
             ActionKey key,
             TPayload payload,
             Action<EnqueueOptions> configure = null,
@@ -735,7 +736,7 @@ public sealed class SquirrelBoxPigeonInterceptorTests
 
             Payloads.Add(payload);
             configure?.Invoke(new EnqueueOptions());
-            return ValueTask.FromResult(Guid.NewGuid());
+            return ValueTask.FromResult(global::Mule.Ulid.NewUlid());
         }
     }
 
