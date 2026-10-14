@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Pigeon.Messaging;
 using Pigeon.Messaging.Contracts;
 using Pigeon.Messaging.Producing;
 using SquirrelBox.InMemory;
@@ -12,7 +13,7 @@ namespace SquirrelBox.Messaging.Tests;
 
 public sealed class SquirrelBoxPigeonOutboxTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     [Fact]
     public async Task PublishDecisionInterceptor_persists_pigeon_publish_envelope_in_squirrelbox_outbox()
@@ -91,6 +92,11 @@ public sealed class SquirrelBoxPigeonOutboxTests
         Assert.Equal(opened.EffectiveCorrelationId, publishMetadata.CorrelationId);
         Assert.Equal(opened.EffectiveAttemptId, publishMetadata.AttemptId);
         Assert.Equal(opened.EffectiveTraceId, publishMetadata.TraceId);
+        var wrappedMetadata = ReadWrappedPayloadSquirrelBoxMetadata(publishEnvelope.Payload);
+        Assert.Equal(opened.EffectiveIdempotencyKey, wrappedMetadata.IdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, wrappedMetadata.CorrelationId);
+        Assert.Equal(opened.EffectiveAttemptId, wrappedMetadata.AttemptId);
+        Assert.Equal(opened.EffectiveTraceId, wrappedMetadata.TraceId);
         AssertNoFlatIdentityMetadata(envelope.Metadata);
         AssertNoFlatIdentityMetadata(publishEnvelope.Metadata);
         Assert.Equal(opened.EffectiveCorrelationId, envelope.CorrelationId);
@@ -151,6 +157,38 @@ public sealed class SquirrelBoxPigeonOutboxTests
     }
 
     [Fact]
+    public async Task PigeonOutboxPublisher_injects_structured_metadata_into_wrapped_payload_from_outbox_envelope()
+    {
+        using var provider = CreateProvider();
+        var outboxSerializer = provider.GetRequiredService<IOutboxEnvelopeSerializer>();
+        var publishEnvelope = CreateWrappedPublishEnvelope(includeSquirrelBoxMetadata: false);
+        var envelope = CreateEnvelope(outboxSerializer, publishEnvelope, typeof(PigeonPublishEnvelope));
+        new SquirrelBoxMessageMetadata
+        {
+            Metadata = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = "outbox-key",
+                CorrelationId = "outbox-correlation",
+                TraceId = "outbox-trace",
+                AttemptId = "outbox-attempt"
+            }
+        }.WriteTo(envelope.Metadata);
+        var publisher = provider.GetRequiredService<SquirrelBoxPigeonOutboxPublisher>();
+
+        var result = await publisher.PublishAsync(envelope);
+        var invoker = provider.GetRequiredService<FakePigeonPublisherInvoker>();
+
+        Assert.True(result.Succeeded);
+        var published = Assert.Single(invoker.Published);
+        var metadata = ReadWrappedPayloadSquirrelBoxMetadata(published.Payload);
+        Assert.Equal("outbox-key", metadata.IdempotencyKey);
+        Assert.Equal("outbox-correlation", metadata.CorrelationId);
+        Assert.Equal("outbox-trace", metadata.TraceId);
+        Assert.Equal("outbox-attempt", metadata.AttemptId);
+        AssertWrappedPayloadMetadataIsObject(published.Payload);
+    }
+
+    [Fact]
     public async Task PigeonOutboxPublisher_converts_legacy_payload_to_pigeon_publish_envelope()
     {
         using var provider = CreateProvider();
@@ -186,6 +224,7 @@ public sealed class SquirrelBoxPigeonOutboxTests
         var services = new ServiceCollection();
         services.AddSingleton(Options.Create(new SquirrelBoxPigeonOptions { EnableOutbox = true }));
         services.AddSingleton<FakePigeonPublishEnvelopeFactory>();
+        services.AddSingleton<ISerializer, FakePigeonSerializer>();
         services.AddSingleton<IPigeonPublishEnvelopeFactory>(
             provider => provider.GetRequiredService<FakePigeonPublishEnvelopeFactory>());
         services.AddSingleton<FakePigeonPublisherInvoker>();
@@ -241,6 +280,57 @@ public sealed class SquirrelBoxPigeonOutboxTests
             IsRaw = isRaw
         };
 
+    private static PigeonPublishEnvelope CreateWrappedPublishEnvelope(bool includeSquirrelBoxMetadata)
+    {
+        var metadata = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["tenant"] = "north"
+        };
+
+        if (includeSquirrelBoxMetadata)
+        {
+            metadata[SquirrelBoxMetadataNames.MetadataSection] = new SquirrelBoxMetadata
+            {
+                IdempotencyKey = "payload-key",
+                CorrelationId = "payload-correlation",
+                TraceId = "payload-trace",
+                AttemptId = "payload-attempt"
+            };
+        }
+
+        var wrappedPayload = new WrappedPayload<OrderMessage>
+        {
+            Domain = "tests",
+            MessageVersion = SemanticVersion.Parse("1.2.0"),
+            CreatedOnUtc = DateTimeOffset.UtcNow,
+            Message = new OrderMessage("order-1"),
+            Metadata = metadata
+        };
+
+        return new PigeonPublishEnvelope
+        {
+            Transport = "pigeon",
+            Topic = "orders",
+            Version = "1.2.0",
+            Operation = "create-order",
+            Destination = "orders",
+            RoutingKey = "orders",
+            ContentType = "application/json",
+            Payload = JsonSerializer.SerializeToUtf8Bytes(wrappedPayload, JsonOptions),
+            PayloadType = typeof(WrappedPayload<OrderMessage>).AssemblyQualifiedName,
+            Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["x-tenant"] = "north"
+            },
+            Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["tenant"] = "north"
+            },
+            CorrelationId = "corr-1",
+            TraceId = "trace-1"
+        };
+    }
+
     private static OutboxEnvelope CreateEnvelope(
         IOutboxEnvelopeSerializer serializer,
         object payload,
@@ -267,6 +357,36 @@ public sealed class SquirrelBoxPigeonOutboxTests
         return squirrelBoxMetadata.Metadata;
     }
 
+    private static SquirrelBoxMetadata ReadWrappedPayloadSquirrelBoxMetadata(byte[] payload)
+    {
+        using var json = JsonDocument.Parse(payload);
+        var metadata = ReadMetadataObject(json.RootElement);
+        Assert.True(metadata.TryGetProperty(SquirrelBoxMetadataNames.MetadataSection, out var section));
+
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SquirrelBoxMetadataNames.MetadataSection] = section.GetRawText()
+        };
+
+        return ReadSquirrelBoxMetadata(values);
+    }
+
+    private static void AssertWrappedPayloadMetadataIsObject(byte[] payload)
+    {
+        using var json = JsonDocument.Parse(payload);
+        var metadata = ReadMetadataObject(json.RootElement);
+        Assert.Equal(JsonValueKind.Object, metadata.GetProperty(SquirrelBoxMetadataNames.MetadataSection).ValueKind);
+    }
+
+    private static JsonElement ReadMetadataObject(JsonElement root)
+    {
+        if (root.TryGetProperty("metadata", out var metadata))
+            return metadata;
+
+        Assert.True(root.TryGetProperty("Metadata", out metadata));
+        return metadata;
+    }
+
     private static void AssertNoFlatIdentityMetadata(IEnumerable<KeyValuePair<string, string>> metadata)
     {
         Assert.DoesNotContain(metadata, item => IsFlatIdentityKey(item.Key));
@@ -282,6 +402,13 @@ public sealed class SquirrelBoxPigeonOutboxTests
 
     private sealed class FakePigeonPublishEnvelopeFactory : IPigeonPublishEnvelopeFactory
     {
+        private readonly ISerializer _serializer;
+
+        public FakePigeonPublishEnvelopeFactory(ISerializer serializer)
+        {
+            _serializer = serializer;
+        }
+
         public ValueTask<PigeonPublishEnvelope> CreateAsync(
             PublishContext context,
             CancellationToken cancellationToken = default)
@@ -289,6 +416,16 @@ public sealed class SquirrelBoxPigeonOutboxTests
             cancellationToken.ThrowIfCancellationRequested();
 
             var route = context.Route;
+            var payload = context.IsRaw
+                ? context.Message
+                : new WrappedPayload<OrderMessage>
+                {
+                    Domain = "tests",
+                    MessageVersion = context.Version,
+                    CreatedOnUtc = DateTimeOffset.UtcNow,
+                    Message = (OrderMessage)context.Message,
+                    Metadata = context.Metadata
+                };
             var envelope = new PigeonPublishEnvelope
             {
                 Transport = context.Transport,
@@ -301,8 +438,8 @@ public sealed class SquirrelBoxPigeonOutboxTests
                 Exchange = route.Exchange,
                 RoutingKey = route.RoutingKey,
                 ContentType = context.ContentType,
-                Payload = JsonSerializer.SerializeToUtf8Bytes(context.Message, context.MessageType, JsonOptions),
-                PayloadType = context.MessageType.AssemblyQualifiedName,
+                Payload = Encoding.UTF8.GetBytes(_serializer.Serialize(payload)),
+                PayloadType = payload.GetType().AssemblyQualifiedName,
                 Headers = new Dictionary<string, string>(context.Headers, StringComparer.OrdinalIgnoreCase),
                 Metadata = context.Metadata.ToDictionary(
                     item => item.Key,
@@ -317,6 +454,15 @@ public sealed class SquirrelBoxPigeonOutboxTests
         }
     }
 
+    private sealed class FakePigeonSerializer : ISerializer
+    {
+        public string Serialize(object payload)
+            => JsonSerializer.Serialize(payload, payload.GetType(), JsonOptions);
+
+        public object Deserialize(string rawJson, Type targetType)
+            => JsonSerializer.Deserialize(rawJson, targetType, JsonOptions);
+    }
+
     private sealed class FakePigeonPublisherInvoker : IPigeonPublisherInvoker
     {
         public IList<PigeonPublishEnvelope> Published { get; } = [];
@@ -329,5 +475,12 @@ public sealed class SquirrelBoxPigeonOutboxTests
             Published.Add(envelope);
             return ValueTask.CompletedTask;
         }
+    }
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new SemanticVersionJsonConverter());
+        return options;
     }
 }

@@ -1,5 +1,8 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Pigeon.Messaging;
 using Pigeon.Messaging.Producing;
 
 namespace SquirrelBox.Messaging.Pigeon;
@@ -11,6 +14,8 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
 {
     private readonly IPigeonPublisherInvoker _publisherInvoker;
     private readonly IOutboxEnvelopeSerializer _outboxSerializer;
+    private readonly ISerializer _pigeonSerializer;
+    private readonly ILogger<SquirrelBoxPigeonOutboxPublisher> _logger;
     private readonly SquirrelBoxPigeonOptions _options;
 
     /// <summary>
@@ -19,11 +24,15 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
     public SquirrelBoxPigeonOutboxPublisher(
         IPigeonPublisherInvoker publisherInvoker,
         IOutboxEnvelopeSerializer outboxSerializer,
-        IOptions<SquirrelBoxPigeonOptions> options)
+        ISerializer pigeonSerializer,
+        IOptions<SquirrelBoxPigeonOptions> options,
+        ILogger<SquirrelBoxPigeonOutboxPublisher> logger = null)
     {
         _publisherInvoker = publisherInvoker ?? throw new ArgumentNullException(nameof(publisherInvoker));
         _outboxSerializer = outboxSerializer ?? throw new ArgumentNullException(nameof(outboxSerializer));
+        _pigeonSerializer = pigeonSerializer ?? throw new ArgumentNullException(nameof(pigeonSerializer));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger ?? NullLogger<SquirrelBoxPigeonOutboxPublisher>.Instance;
     }
 
     /// <inheritdoc />
@@ -38,6 +47,16 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
 
         var publishEnvelope = WithDurableMetadata(DeserializePublishEnvelope(envelope), envelope);
         await _publisherInvoker.PublishAsync(publishEnvelope, cancellationToken);
+        _logger.LogInformation(
+            SquirrelBoxLogEvents.PigeonOutboxPublished,
+            "SquirrelBox published durable Pigeon outbox envelope. OutboxEnvelopeId={OutboxEnvelopeId} Topic={Topic} Version={Version} Operation={Operation} Destination={Destination} CorrelationId={CorrelationId} TraceId={TraceId}",
+            envelope.Id,
+            publishEnvelope.Topic,
+            publishEnvelope.Version,
+            publishEnvelope.Operation,
+            publishEnvelope.Destination,
+            publishEnvelope.CorrelationId,
+            publishEnvelope.TraceId);
         return OutboxPublishResult.Success;
     }
 
@@ -92,7 +111,7 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
             IsRaw = payload.IsRaw
         };
 
-    private static PigeonPublishEnvelope WithDurableMetadata(
+    private PigeonPublishEnvelope WithDurableMetadata(
         PigeonPublishEnvelope publishEnvelope,
         OutboxEnvelope outboxEnvelope)
     {
@@ -104,33 +123,11 @@ public sealed class SquirrelBoxPigeonOutboxPublisher : IOutboxTransportPublisher
             return publishEnvelope;
         }
 
-        var metadata = publishEnvelope.Metadata is null
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            : new Dictionary<string, string>(publishEnvelope.Metadata, StringComparer.OrdinalIgnoreCase);
-
-        if (metadata.ContainsKey(SquirrelBoxMetadataNames.MetadataSection))
-            return publishEnvelope;
-
-        metadata[SquirrelBoxMetadataNames.MetadataSection] = value;
-
-        return new PigeonPublishEnvelope
-        {
-            Transport = publishEnvelope.Transport,
-            Topic = publishEnvelope.Topic,
-            Version = publishEnvelope.Version,
-            Operation = publishEnvelope.Operation,
-            Destination = publishEnvelope.Destination,
-            Exchange = publishEnvelope.Exchange,
-            RoutingKey = publishEnvelope.RoutingKey,
-            ContentType = publishEnvelope.ContentType,
-            Payload = publishEnvelope.Payload,
-            PayloadType = publishEnvelope.PayloadType,
-            Headers = publishEnvelope.Headers,
-            Metadata = metadata,
-            CorrelationId = publishEnvelope.CorrelationId,
-            TraceId = publishEnvelope.TraceId,
-            IsRaw = publishEnvelope.IsRaw
-        };
+        return SquirrelBoxPigeonMetadataSynchronizer.Enrich(
+            publishEnvelope,
+            value,
+            _pigeonSerializer,
+            _logger);
     }
 
     private static string ResolveMetadata(OutboxEnvelope envelope, string key)
