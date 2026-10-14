@@ -16,6 +16,35 @@ public sealed class InboxMuleSchedulerTests
     private static readonly ActionKey FailOnceKey = ActionKey.From("tests.squirrelbox.fail-once.v1");
     private static readonly ActionKey FailAlwaysKey = ActionKey.From("tests.squirrelbox.fail-always.v1");
 
+    [Theory]
+    [InlineData("inbox")]
+    [InlineData("mule")]
+    [InlineData("settings")]
+    public void Constructor_requires_dependencies(string dependency)
+    {
+        var inbox = Substitute.For<IInboxService>();
+        var mule = Substitute.For<IMuleClient>();
+        var settings = Options.Create(new MuleSettings());
+
+        Assert.Throws<ArgumentNullException>(() => new InboxMuleScheduler(
+            dependency == "inbox" ? null : inbox,
+            dependency == "mule" ? null : mule,
+            dependency == "settings" ? null : settings));
+    }
+
+    [Fact]
+    public void EnqueueCurrentAsync_requires_current_inbox_context()
+    {
+        var inbox = Substitute.For<IInboxService>();
+        var scheduler = new InboxMuleScheduler(
+            inbox,
+            Substitute.For<IMuleClient>(),
+            Options.Create(new MuleSettings()));
+
+        Assert.Throws<InboxContextUnavailableException>(() =>
+            scheduler.EnqueueCurrentAsync(Key, new DeferredPayload("missing-context")));
+    }
+
     [Fact]
     public async Task EnqueueCurrentAsync_attaches_inbox_metadata_to_mule_action()
     {
@@ -48,13 +77,23 @@ public sealed class InboxMuleSchedulerTests
             correlationId: "trace-1",
             executionMode: InboxExecutionMode.Deferred));
 
+        var configured = false;
         await scope.ServiceProvider.GetRequiredService<IInboxMuleScheduler>()
-            .EnqueueCurrentAsync(Key, new DeferredPayload("order-1"));
+            .EnqueueCurrentAsync(
+                Key,
+                new DeferredPayload("order-1"),
+                options =>
+                {
+                    configured = true;
+                    options.Metadata["custom"] = "yes";
+                });
 
         Assert.Equal("trace-1", capturedOptions.CorrelationId);
         Assert.Equal(opened.Entry.Id.ToString(), capturedOptions.DeduplicationKey);
         Assert.Equal(opened.Entry.Id.ToString(), capturedOptions.Metadata[SquirrelBoxMuleMetadata.InboxEntryId]);
         Assert.Equal("order-1", capturedOptions.Metadata[SquirrelBoxMuleMetadata.IdempotencyKey]);
+        Assert.Equal("yes", capturedOptions.Metadata["custom"]);
+        Assert.True(configured);
     }
 
     [Fact]
@@ -189,11 +228,34 @@ public sealed class InboxMuleSchedulerTests
         Assert.Equal("6", globalOptions.Metadata[SquirrelBoxMuleMetadata.DeferredMaxAttempts]);
     }
 
+    [Fact]
+    public async Task EnqueueCurrentAsync_preserves_custom_lane_and_falls_back_to_global_legacy_attempts()
+    {
+        var captured = await EnqueueWithDirectSchedulerSettingsAsync(
+            settings =>
+            {
+                settings.MaxAttempts = 9;
+                settings.Lanes["orders"] = new MuleLaneSettings { MaxAttempts = 0 };
+            },
+            options => options.AddInboxPolicy("orders", policy =>
+            {
+                policy.Deferred.Lane = "orders";
+                policy.Deferred.MaxAttempts = 0;
+            }),
+            "orders",
+            "order-custom-lane",
+            enqueueOptions => enqueueOptions.Lane = "custom");
+
+        Assert.Equal("custom", captured.Lane);
+        Assert.Equal("9", captured.Metadata[SquirrelBoxMuleMetadata.DeferredMaxAttempts]);
+    }
+
     private static async Task<EnqueueOptions> EnqueueWithDirectSchedulerSettingsAsync(
         Action<MuleSettings> configureMule,
         Action<SquirrelBoxOptions> configureSquirrelBox,
         string policyName,
-        string id)
+        string id,
+        Action<EnqueueOptions> configureEnqueue = null)
     {
         var mule = Substitute.For<IMuleClient>();
         EnqueueOptions capturedOptions = null;
@@ -229,7 +291,7 @@ public sealed class InboxMuleSchedulerTests
             mule,
             Options.Create(muleSettings));
 
-        await scheduler.EnqueueCurrentAsync(Key, new DeferredPayload(id));
+        await scheduler.EnqueueCurrentAsync(Key, new DeferredPayload(id), configureEnqueue);
 
         return capturedOptions;
     }

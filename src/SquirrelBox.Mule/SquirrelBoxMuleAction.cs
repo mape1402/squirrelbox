@@ -110,7 +110,7 @@ public abstract class SquirrelBoxMuleAction<TPayload> : IMuleAction<TPayload>
             return true;
         }
 
-        var previousAttempts = context.Action?.Attempts ?? 0;
+        var previousAttempts = context.Action.Attempts;
         var currentAttempt = previousAttempts + 1;
 
         return currentAttempt >= maxAttempts;
