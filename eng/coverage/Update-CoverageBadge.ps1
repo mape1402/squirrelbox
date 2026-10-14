@@ -52,16 +52,18 @@ $branchCovered = ($branchCoveredBySourceLine.Values | Measure-Object -Sum).Sum
 $linePercent = if ($lineValid -eq 0) { [decimal] 100 } else { [math]::Round(($lineCovered / $lineValid) * 100, 2) }
 $branchPercent = if ($branchValid -eq 0) { [decimal] 100 } else { [math]::Round(($branchCovered / $branchValid) * 100, 2) }
 
-$color = if ($linePercent -ge 99) {
+$coveragePercent = [math]::Min($linePercent, $branchPercent)
+
+$color = if ($coveragePercent -ge 99) {
     "brightgreen"
 }
-elseif ($linePercent -ge 95) {
+elseif ($coveragePercent -ge 95) {
     "green"
 }
-elseif ($linePercent -ge 90) {
+elseif ($coveragePercent -ge 90) {
     "yellowgreen"
 }
-elseif ($linePercent -ge 80) {
+elseif ($coveragePercent -ge 80) {
     "yellow"
 }
 else {
@@ -71,7 +73,7 @@ else {
 $badge = [ordered] @{
     schemaVersion = 1
     label = "Coverage"
-    message = ("{0:N2}%" -f $linePercent)
+    message = ("lines {0:N2}% | branches {1:N2}%" -f $linePercent, $branchPercent)
     color = $color
 }
 
