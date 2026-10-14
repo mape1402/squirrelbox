@@ -47,7 +47,7 @@ public static class SquirrelBoxEndpointFilterExtensions
         ArgumentNullException.ThrowIfNull(builder);
         var payloadOptions = new SquirrelBoxInboxEndpointOptions
         {
-            ArgumentName = string.IsNullOrWhiteSpace(argumentName) ? "request" : argumentName
+            ArgumentName = argumentName
         };
         configure?.Invoke(payloadOptions);
         var metadata = new SquirrelBoxInboxEndpointMetadata(payloadOptions);

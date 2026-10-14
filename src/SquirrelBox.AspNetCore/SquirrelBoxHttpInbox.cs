@@ -122,8 +122,7 @@ internal static class SquirrelBoxHttpInbox
         if (!string.IsNullOrWhiteSpace(completion.ContentType))
             httpContext.Response.ContentType = completion.ContentType;
 
-        if (decision.Entry?.ToIdentity() is { } identity)
-            AttachIdentityHeaders(httpContext, options, identity);
+        AttachIdentityHeaders(httpContext, options, decision.Entry.ToIdentity());
 
         foreach (var header in completion.Headers)
         {

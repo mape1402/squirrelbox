@@ -169,8 +169,9 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
 
         try
         {
-            await foreach (var @event in channel.Reader.ReadAllAsync(context.RequestAborted))
+            while (true)
             {
+                var @event = await channel.Reader.ReadAsync(context.RequestAborted);
                 await WriteEventAsync(context, @event);
             }
         }
@@ -200,7 +201,7 @@ public static class SquirrelBoxDashboardEndpointRouteBuilderExtensions
         if (options.Authentication.Mode == SquirrelBoxDashboardAuthenticationMode.AspNetCoreAuthentication)
         {
             var principal = context.User;
-            if (principal?.Identity?.IsAuthenticated != true)
+            if (principal.Identity?.IsAuthenticated != true)
                 return null;
 
             var user = new SquirrelBoxDashboardUser
