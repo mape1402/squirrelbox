@@ -145,13 +145,13 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
         Ulid envelopeId,
         CancellationToken cancellationToken)
         => await dbContext.Set<SquirrelBoxOutboxEnvelopeRecord>()
-            .SingleOrDefaultAsync(record => record.Id == envelopeId.ToString(), cancellationToken)
+            .SingleOrDefaultAsync(record => record.Id == envelopeId, cancellationToken)
             ?? throw new KeyNotFoundException($"Outbox envelope '{envelopeId}' was not found.");
 
     private static SquirrelBoxOutboxEnvelopeRecord ToRecord(OutboxEnvelope envelope)
         => new()
         {
-            Id = envelope.Id.ToString(),
+            Id = envelope.Id,
             Transport = envelope.Transport,
             Operation = envelope.Operation,
             Destination = envelope.Destination,
@@ -176,7 +176,7 @@ public sealed class EntityFrameworkOutboxStore<TDbContext> : IOutboxStore
     {
         var envelope = new OutboxEnvelope
         {
-            Id = Ulid.Parse(record.Id),
+            Id = record.Id,
             Transport = record.Transport,
             Operation = record.Operation,
             Destination = record.Destination,

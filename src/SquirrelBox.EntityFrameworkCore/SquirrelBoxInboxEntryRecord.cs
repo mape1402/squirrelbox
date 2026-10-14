@@ -8,10 +8,9 @@ namespace SquirrelBox.EntityFrameworkCore;
 public sealed class SquirrelBoxInboxEntryRecord
 {
     /// <summary>
-    /// Gets or sets the ULID inbox entry id stored as text.
+    /// Gets or sets the ULID inbox entry id.
     /// </summary>
-    [MaxLength(26)]
-    public string Id { get; set; }
+    public Ulid Id { get; set; }
 
     /// <summary>
     /// Gets or sets the transport or component that opened the inbox entry.

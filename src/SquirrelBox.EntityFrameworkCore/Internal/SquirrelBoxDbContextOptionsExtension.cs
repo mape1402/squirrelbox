@@ -8,6 +8,18 @@ internal sealed class SquirrelBoxDbContextOptionsExtension : IDbContextOptionsEx
 {
     private DbContextOptionsExtensionInfo _info;
 
+    public SquirrelBoxDbContextOptionsExtension()
+        : this(new SquirrelBoxEntityFrameworkOptions())
+    {
+    }
+
+    public SquirrelBoxDbContextOptionsExtension(SquirrelBoxEntityFrameworkOptions options)
+    {
+        Options = options?.Clone() ?? new SquirrelBoxEntityFrameworkOptions();
+    }
+
+    public SquirrelBoxEntityFrameworkOptions Options { get; }
+
     public DbContextOptionsExtensionInfo Info => _info ??= new ExtensionInfo(this);
 
     public void ApplyServices(IServiceCollection services)
@@ -21,9 +33,12 @@ internal sealed class SquirrelBoxDbContextOptionsExtension : IDbContextOptionsEx
 
     private sealed class ExtensionInfo : DbContextOptionsExtensionInfo
     {
-        public ExtensionInfo(IDbContextOptionsExtension extension)
+        private readonly SquirrelBoxDbContextOptionsExtension _extension;
+
+        public ExtensionInfo(SquirrelBoxDbContextOptionsExtension extension)
             : base(extension)
         {
+            _extension = extension;
         }
 
         public override bool IsDatabaseProvider => false;
@@ -31,12 +46,15 @@ internal sealed class SquirrelBoxDbContextOptionsExtension : IDbContextOptionsEx
         public override string LogFragment => "using SquirrelBox ";
 
         public override int GetServiceProviderHashCode()
-            => typeof(SquirrelBoxDbContextOptionsExtension).GetHashCode();
+            => HashCode.Combine(
+                typeof(SquirrelBoxDbContextOptionsExtension),
+                _extension.Options.GetModelHashCode());
 
         public override void PopulateDebugInfo(IDictionary<string, string> debugInfo)
-            => debugInfo["SquirrelBox"] = "1";
+            => debugInfo["SquirrelBox"] = _extension.Options.GetModelHashCode().ToString();
 
         public override bool ShouldUseSameServiceProvider(DbContextOptionsExtensionInfo other)
-            => other is ExtensionInfo;
+            => other is ExtensionInfo otherInfo &&
+               otherInfo._extension.Options.GetModelHashCode() == _extension.Options.GetModelHashCode();
     }
 }

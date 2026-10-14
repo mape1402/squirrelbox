@@ -111,7 +111,7 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         using var verificationScope = provider.CreateScope();
         var dbContext = verificationScope.ServiceProvider.GetRequiredService<TestInboxDbContext>();
         var attempts = await dbContext.Set<SquirrelBoxInboxAttemptRecord>()
-            .Where(attempt => attempt.InboxEntryId == opened.Entry.Id.ToString())
+            .Where(attempt => attempt.InboxEntryId == opened.Entry.Id)
             .OrderBy(attempt => attempt.CreatedOnUtc)
             .ToListAsync();
 

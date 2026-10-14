@@ -14,11 +14,15 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     /// </summary>
     /// <typeparam name="TDbContext">The registered application DbContext type.</typeparam>
     /// <param name="builder">The SquirrelBox builder.</param>
+    /// <param name="configure">Optional Entity Framework Core storage configuration.</param>
     /// <returns>The same SquirrelBox builder for fluent registration.</returns>
-    public static ISquirrelBoxBuilder UseEntityFrameworkInbox<TDbContext>(this ISquirrelBoxBuilder builder)
+    public static ISquirrelBoxBuilder UseEntityFrameworkInbox<TDbContext>(
+        this ISquirrelBoxBuilder builder,
+        Action<SquirrelBoxEntityFrameworkOptionsBuilder> configure = null)
         where TDbContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
+        AddSquirrelBoxModelToDbContext<TDbContext>(builder.Services, BuildOptions(configure));
         AddEntityFrameworkInbox<TDbContext>(builder.Services);
         return builder;
     }
@@ -28,11 +32,15 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     /// </summary>
     /// <typeparam name="TDbContext">The registered application DbContext type.</typeparam>
     /// <param name="builder">The SquirrelBox builder.</param>
+    /// <param name="configure">Optional Entity Framework Core storage configuration.</param>
     /// <returns>The same SquirrelBox builder for fluent registration.</returns>
-    public static ISquirrelBoxBuilder UseEntityFrameworkOutbox<TDbContext>(this ISquirrelBoxBuilder builder)
+    public static ISquirrelBoxBuilder UseEntityFrameworkOutbox<TDbContext>(
+        this ISquirrelBoxBuilder builder,
+        Action<SquirrelBoxEntityFrameworkOptionsBuilder> configure = null)
         where TDbContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
+        AddSquirrelBoxModelToDbContext<TDbContext>(builder.Services, BuildOptions(configure));
         AddEntityFrameworkOutbox<TDbContext>(builder.Services);
         return builder;
     }
@@ -42,11 +50,15 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     /// </summary>
     /// <typeparam name="TDbContext">The registered application DbContext type.</typeparam>
     /// <param name="builder">The SquirrelBox builder.</param>
+    /// <param name="configure">Optional Entity Framework Core storage configuration.</param>
     /// <returns>The same SquirrelBox builder for fluent registration.</returns>
-    public static ISquirrelBoxBuilder UseEntityFramework<TDbContext>(this ISquirrelBoxBuilder builder)
+    public static ISquirrelBoxBuilder UseEntityFramework<TDbContext>(
+        this ISquirrelBoxBuilder builder,
+        Action<SquirrelBoxEntityFrameworkOptionsBuilder> configure = null)
         where TDbContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
+        AddSquirrelBoxModelToDbContext<TDbContext>(builder.Services, BuildOptions(configure));
         AddEntityFramework<TDbContext>(builder.Services);
         return builder;
     }
@@ -54,7 +66,6 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     private static void AddEntityFrameworkInbox<TDbContext>(IServiceCollection services)
         where TDbContext : DbContext
     {
-        services.AddSquirrelBoxModelToDbContext<TDbContext>();
         services.TryAddScoped<ISquirrelBoxDbContextFactory<TDbContext>, SquirrelBoxDbContextFactory<TDbContext>>();
         services.AddScoped<EntityFrameworkInboxStore<TDbContext>>(provider =>
             new EntityFrameworkInboxStore<TDbContext>(
@@ -66,7 +77,6 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
     private static void AddEntityFrameworkOutbox<TDbContext>(IServiceCollection services)
         where TDbContext : DbContext
     {
-        services.AddSquirrelBoxModelToDbContext<TDbContext>();
         services.TryAddScoped<ISquirrelBoxDbContextFactory<TDbContext>, SquirrelBoxDbContextFactory<TDbContext>>();
         services.AddScoped<EntityFrameworkOutboxStore<TDbContext>>(provider =>
             new EntityFrameworkOutboxStore<TDbContext>(
@@ -81,7 +91,17 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
         AddEntityFrameworkOutbox<TDbContext>(services);
     }
 
-    private static IServiceCollection AddSquirrelBoxModelToDbContext<TDbContext>(this IServiceCollection services)
+    private static SquirrelBoxEntityFrameworkOptions BuildOptions(
+        Action<SquirrelBoxEntityFrameworkOptionsBuilder> configure)
+    {
+        var options = new SquirrelBoxEntityFrameworkOptions();
+        configure?.Invoke(new SquirrelBoxEntityFrameworkOptionsBuilder(options));
+        return options;
+    }
+
+    private static IServiceCollection AddSquirrelBoxModelToDbContext<TDbContext>(
+        this IServiceCollection services,
+        SquirrelBoxEntityFrameworkOptions squirrelBoxOptions)
         where TDbContext : DbContext
     {
         var serviceType = typeof(DbContextOptions<TDbContext>);
@@ -98,9 +118,9 @@ public static class EntityFrameworkSquirrelBoxServiceCollectionExtensions
             serviceType,
             provider =>
             {
-                var options = ResolveOptions<TDbContext>(descriptor, provider);
-                return new DbContextOptionsBuilder<TDbContext>(options)
-                    .UseSquirrelBoxModel()
+                var dbContextOptions = ResolveOptions<TDbContext>(descriptor, provider);
+                return new DbContextOptionsBuilder<TDbContext>(dbContextOptions)
+                    .UseSquirrelBoxModel(squirrelBoxOptions)
                     .Options;
             },
             descriptor.Lifetime));

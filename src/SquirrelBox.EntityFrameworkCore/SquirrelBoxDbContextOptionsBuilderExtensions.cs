@@ -1,16 +1,17 @@
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using SquirrelBox.EntityFrameworkCore.Internal;
+using SquirrelBox.EntityFrameworkCore;
 
 namespace Microsoft.EntityFrameworkCore;
 
 internal static class SquirrelBoxDbContextOptionsBuilderExtensions
 {
-    internal static DbContextOptionsBuilder UseSquirrelBoxModel(this DbContextOptionsBuilder optionsBuilder)
+    internal static DbContextOptionsBuilder UseSquirrelBoxModel(
+        this DbContextOptionsBuilder optionsBuilder,
+        SquirrelBoxEntityFrameworkOptions options)
     {
-        var extension = optionsBuilder.Options.FindExtension<SquirrelBoxDbContextOptionsExtension>()
-            ?? new SquirrelBoxDbContextOptionsExtension();
-
-        ((IDbContextOptionsBuilderInfrastructure)optionsBuilder).AddOrUpdateExtension(extension);
+        ((IDbContextOptionsBuilderInfrastructure)optionsBuilder)
+            .AddOrUpdateExtension(new SquirrelBoxDbContextOptionsExtension(options));
         return optionsBuilder;
     }
 }
