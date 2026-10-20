@@ -57,6 +57,9 @@ public sealed class SquirrelBoxInboxAttribute : Attribute, IAsyncActionFilter, I
     /// <inheritdoc />
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
 
+    /// <inheritdoc />
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
+
     /// <summary>
     /// Gets or sets whether this action should defer execution through the configured deferred adapter.
     /// </summary>

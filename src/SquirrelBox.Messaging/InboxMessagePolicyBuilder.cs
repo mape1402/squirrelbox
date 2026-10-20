@@ -101,6 +101,17 @@ public sealed class InboxMessagePolicyBuilder
     }
 
     /// <summary>
+    /// Sets how correlation ids are resolved for messages matched by this policy.
+    /// </summary>
+    /// <param name="mode">The correlation id resolution mode.</param>
+    /// <returns>The same builder for chaining.</returns>
+    public InboxMessagePolicyBuilder WithCorrelationIdResolution(CorrelationIdResolutionMode mode)
+    {
+        _policy.CorrelationIdResolutionMode = mode;
+        return this;
+    }
+
+    /// <summary>
     /// Sets the policy to defer accepted message execution.
     /// </summary>
     /// <returns>The same builder for chaining.</returns>

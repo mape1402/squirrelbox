@@ -51,6 +51,11 @@ public sealed class InboxMessagePolicy
     public InboxExecutionMode? ExecutionMode { get; set; }
 
     /// <summary>
+    /// Gets or sets the correlation id resolution mode selected by this policy.
+    /// </summary>
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
+
+    /// <summary>
     /// Gets or sets whether payload hashes can be used as idempotency keys for this policy.
     /// </summary>
     public bool? AllowPayloadHashAsIdempotencyKey { get; set; }

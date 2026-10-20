@@ -26,6 +26,11 @@ public sealed class SquirrelBoxInboxEndpointOptions
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
 
     /// <summary>
+    /// Gets or sets the correlation id resolution mode selected by this entrypoint.
+    /// </summary>
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
+
+    /// <summary>
     /// Gets or sets an optional execution mode override selected by this entrypoint.
     /// </summary>
     public InboxExecutionMode? ExecutionMode { get; set; }

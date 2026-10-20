@@ -10,6 +10,7 @@ internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetada
         PolicyName = options.PolicyName;
         EntryLifetime = options.EntryLifetime;
         CompletedLock = options.CompletedLock;
+        CorrelationIdResolutionMode = options.CorrelationIdResolutionMode;
         ExecutionMode = options.ExecutionMode;
         Deferred = CloneDeferred(options.Deferred);
     }
@@ -21,6 +22,8 @@ internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetada
     public TimeSpan? EntryLifetime { get; }
 
     public InboxCompletedLockMode CompletedLock { get; }
+
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; }
 
     public InboxExecutionMode? ExecutionMode { get; }
 
