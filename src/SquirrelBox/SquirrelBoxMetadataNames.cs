@@ -29,4 +29,9 @@ public static class SquirrelBoxMetadataNames
     /// Gets the default metadata name for attempt ids.
     /// </summary>
     public const string AttemptId = "attempt-id";
+
+    /// <summary>
+    /// Gets the persisted metadata name for the component that resolved a correlation id.
+    /// </summary>
+    public const string CorrelationIdResolver = "squirrelbox:correlation-id-resolver";
 }

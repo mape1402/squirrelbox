@@ -11,7 +11,7 @@ public sealed class ConstructorGuardCoverageTests
     [InlineData("contextAccessor")]
     [InlineData("identityAccessor")]
     [InlineData("payloadHasher")]
-    [InlineData("correlationIdFactory")]
+    [InlineData("correlationIdResolver")]
     [InlineData("traceIdFactory")]
     [InlineData("attemptIdFactory")]
     [InlineData("events")]
@@ -27,7 +27,7 @@ public sealed class ConstructorGuardCoverageTests
             dependency == "contextAccessor" ? null : services.GetRequiredService<IInboxContextAccessor>(),
             dependency == "identityAccessor" ? null : services.GetRequiredService<ISquirrelBoxIdentityAccessor>(),
             dependency == "payloadHasher" ? null : services.GetRequiredService<IInboxPayloadHasher>(),
-            dependency == "correlationIdFactory" ? null : services.GetRequiredService<ICorrelationIdFactory>(),
+            dependency == "correlationIdResolver" ? null : services.GetRequiredService<ICorrelationIdResolver>(),
             dependency == "traceIdFactory" ? null : services.GetRequiredService<ITraceIdFactory>(),
             dependency == "attemptIdFactory" ? null : services.GetRequiredService<IAttemptIdFactory>(),
             dependency == "events" ? null : services.GetRequiredService<ISquirrelBoxEventPublisher>(),

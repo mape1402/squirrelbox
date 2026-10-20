@@ -23,6 +23,12 @@ public sealed class SquirrelBoxOptions
     public bool AllowPayloadHashAsIdempotencyKey { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the default correlation id resolution mode.
+    /// </summary>
+    public CorrelationIdResolutionMode DefaultCorrelationIdResolutionMode { get; set; } =
+        CorrelationIdResolutionMode.FactoryOnly;
+
+    /// <summary>
     /// Gets or sets the owner name used when an open request does not provide one.
     /// </summary>
     public string DefaultOwner { get; set; } = "manual";

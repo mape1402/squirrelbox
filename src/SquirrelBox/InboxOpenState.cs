@@ -43,5 +43,10 @@ public enum InboxOpenState
     /// <summary>
     /// No explicit or computed idempotency key was available.
     /// </summary>
-    MissingIdempotencyKey
+    MissingIdempotencyKey,
+
+    /// <summary>
+    /// The selected policy required a correlation id but no incoming value or strategy result was available.
+    /// </summary>
+    MissingCorrelationId
 }
