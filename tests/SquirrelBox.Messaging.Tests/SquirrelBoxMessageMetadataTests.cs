@@ -122,6 +122,15 @@ public sealed class SquirrelBoxMessageMetadataTests
         Assert.Null(result.EffectiveAttemptId);
         Assert.Null(result.EffectiveTraceId);
         Assert.Same(SquirrelBoxMessageMetadata.Empty, result.EffectiveMetadata);
+        Assert.Equal(
+            new InboxMessageOpenResult(null, null, Metadata: null),
+            result);
+        Assert.Contains(nameof(InboxMessageOpenResult), result.ToString(), StringComparison.Ordinal);
+        Assert.Equal(result, result with { });
+        var (openResult, decision, metadata) = result;
+        Assert.Null(openResult);
+        Assert.Null(decision);
+        Assert.Null(metadata);
     }
 
     private static SquirrelBoxMessageMetadata CreateMetadata()

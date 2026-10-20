@@ -242,5 +242,16 @@ internal static class SquirrelBoxHttpInbox
     private static string ResolveDefaultName(IEnumerable<string> names, string fallback)
         => names?.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? fallback;
 
-    public sealed record ResolvedHeader(string Name, string Value);
+    public sealed class ResolvedHeader
+    {
+        public ResolvedHeader(string name, string value)
+        {
+            Name = name;
+            Value = value;
+        }
+
+        public string Name { get; }
+
+        public string Value { get; }
+    }
 }

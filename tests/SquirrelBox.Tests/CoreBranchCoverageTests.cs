@@ -171,7 +171,9 @@ public sealed class CoreBranchCoverageTests
         request.Headers["header"] = "value";
         request.Metadata["metadata"] = "value";
 
-        var envelope = new DefaultOutboxProfile().CreateEnvelope(
+        var profile = new DefaultOutboxProfile();
+        Assert.True(profile.CanHandle(request));
+        var envelope = profile.CreateEnvelope(
             request,
             new OutboxProfileContext(serializer, resolver, new OutboxOptions(), now));
 

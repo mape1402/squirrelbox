@@ -26,9 +26,9 @@ public sealed class DefaultCorrelationIdResolver : ICorrelationIdResolver
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         ArgumentNullException.ThrowIfNull(strategies);
         _strategies = strategies
-            .Select((strategy, index) => new OrderedStrategy(
-                strategy ?? throw new ArgumentException("Correlation id strategies cannot contain null values.", nameof(strategies)),
-                index))
+            .Select((strategy, index) => (
+                Strategy: strategy ?? throw new ArgumentException("Correlation id strategies cannot contain null values.", nameof(strategies)),
+                Index: index))
             .OrderBy(item => item.Strategy.Order)
             .ThenBy(item => item.Index)
             .Select(item => item.Strategy)
@@ -136,6 +136,4 @@ public sealed class DefaultCorrelationIdResolver : ICorrelationIdResolver
 
     private static string ResolveName(string name, Type strategyType)
         => string.IsNullOrWhiteSpace(name) ? strategyType.Name : name;
-
-    private sealed record OrderedStrategy(ICorrelationIdResolutionStrategy Strategy, int Index);
 }

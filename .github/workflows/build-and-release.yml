@@ -115,8 +115,8 @@ jobs:
           ./eng/coverage/Update-CoverageBadge.ps1
           -CoverageRoot "$env:COVERAGE_RESULTS"
           -BadgePath "$env:COVERAGE_BADGE_PATH"
-          -MinimumLineCoverage 99
-          -MinimumBranchCoverage 99
+          -MinimumLineCoverage 100
+          -MinimumBranchCoverage 100
 
       - name: Commit coverage badge
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

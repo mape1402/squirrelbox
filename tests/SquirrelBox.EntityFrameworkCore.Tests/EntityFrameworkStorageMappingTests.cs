@@ -39,6 +39,11 @@ public sealed class EntityFrameworkStorageMappingTests
         Assert.Equal(SquirrelBoxUlidStorageOptions.BinaryLength, id.GetMaxLength());
         Assert.True(id.IsFixedLength());
         Assert.Equal(typeof(byte[]), attemptEntryId.GetTypeMapping().Converter.ProviderClrType);
+
+        var value = Ulid.NewUlid();
+        var converter = id.GetTypeMapping().Converter;
+        var bytes = Assert.IsType<byte[]>(converter.ConvertToProvider(value));
+        Assert.Equal(value, converter.ConvertFromProvider(bytes));
     }
 
     [Fact]

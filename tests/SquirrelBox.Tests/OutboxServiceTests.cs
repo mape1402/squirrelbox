@@ -13,6 +13,7 @@ public sealed class OutboxServiceTests
         using var scope = provider.CreateScope();
 
         var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
+        Assert.Null(outbox.Current);
         var envelope = await outbox.EnqueueAsync(new OutboxEnqueueRequest
         {
             Transport = "test",

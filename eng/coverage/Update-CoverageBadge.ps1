@@ -21,6 +21,10 @@ foreach ($file in $files) {
     foreach ($class in $document.coverage.packages.package.classes.class) {
         $sourceFile = [string] $class.filename
         foreach ($line in @($class.lines.line)) {
+            if ($null -eq $line -or [string]::IsNullOrWhiteSpace([string] $line.number)) {
+                continue
+            }
+
             $sourceLineKey = "$sourceFile`:$($line.number)"
             if (-not $lineHitsBySourceLine.ContainsKey($sourceLineKey)) {
                 $lineHitsBySourceLine[$sourceLineKey] = 0

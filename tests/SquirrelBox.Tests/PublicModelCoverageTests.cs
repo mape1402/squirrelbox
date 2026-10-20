@@ -290,8 +290,26 @@ public sealed class PublicModelCoverageTests
             context);
 
         Assert.Equal("key-from-context", result.EffectiveIdempotencyKey);
+        Assert.Equal(InboxIdempotencyKeySource.Explicit, context.IdempotencyKeySource);
         Assert.False(result.Executed);
         Assert.True(result.Deferred);
+    }
+
+    [Fact]
+    public void Inbox_decision_record_members_are_available_to_transport_adapters()
+    {
+        var entry = new InboxEntry { IdempotencyKey = "decision-key" };
+        var decision = new InboxDecision(InboxOpenState.Opened, InboxPolicyAction.Continue, entry);
+
+        Assert.Equal(
+            new InboxDecision(InboxOpenState.Opened, InboxPolicyAction.Continue, entry),
+            decision);
+        Assert.Contains(nameof(InboxDecision), decision.ToString(), StringComparison.Ordinal);
+        Assert.Equal(decision, decision with { });
+        var (state, action, relatedEntry) = decision;
+        Assert.Equal(InboxOpenState.Opened, state);
+        Assert.Equal(InboxPolicyAction.Continue, action);
+        Assert.Same(entry, relatedEntry);
     }
 
     [Fact]
