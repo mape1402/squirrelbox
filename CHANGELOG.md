@@ -4,6 +4,21 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.1.0] - 2026-10-20
+
+### Added
+
+- Added async, transport-neutral correlation id resolution through ordered, scoped `ICorrelationIdResolutionStrategy` implementations.
+- Added `FactoryOnly`, `ResolveThenGenerate`, and `ResolveRequired` modes with entrypoint, named-policy, and global selection.
+- Added the explicit `MissingCorrelationId` inbox outcome and configurable policy action for strict resolution failures.
+- Added persisted resolver diagnostics through `squirrelbox:correlation-id-resolver`, `SquirrelBoxMetadataValueSource.Resolved`, and stable correlation-resolution log events.
+- Added HTTP and Messaging entrypoint configuration, SQL Server E2E coverage for application `DbContext` lookups, and legacy relationship scenarios in the sample application.
+
+### Changed
+
+- Changed the CI quality gate to require 100% line and branch coverage and corrected the Cobertura aggregator to ignore generated empty line nodes without source locations.
+- Updated the README with correlation strategy registration, resolution precedence, HTTP and Messaging configuration, strict failure behavior, and runnable sample requests.
+
 ## [v4.0.0] - 2026-10-14
 
 ### Added

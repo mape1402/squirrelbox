@@ -171,11 +171,12 @@ Operation identity: IdempotencyKey + CorrelationId
 Attempt identity:   AttemptId + TraceId
 ```
 
-The idempotency key and correlation id are matched 1:1 for the protected operation. If the
-first request/message does not provide either value, SquirrelBox can compute the idempotency
-key from the semantic payload hash and generate the correlation id. Later duplicates that
+An idempotency key keeps the same correlation id for its protected operation. If the first
+request/message does not provide either value, SquirrelBox can compute the idempotency key
+from the semantic payload hash and generate the correlation id. Later duplicates that
 produce the same idempotency key return the original correlation id, while each duplicate
-open attempt receives a new attempt id and trace id.
+open attempt receives a new attempt id and trace id. A resolver can intentionally reuse that
+correlation id across other related operations without reusing their idempotency keys.
 
 ```csharp
 var identity = inbox.LastContext?.Identity;
@@ -198,6 +199,64 @@ services.AddSquirrelBox();
 ```
 
 Register custom factories before `AddSquirrelBox()` or replace the service descriptor explicitly.
+
+### Async Correlation Resolution
+
+Factories create terminal fallback values. When a correlation id must be recovered from
+application state, register one or more scoped `ICorrelationIdResolutionStrategy`
+implementations instead. Strategies are transport-neutral and receive the source,
+operation, effective idempotency key, payload, and incoming metadata.
+
+```csharp
+public sealed class LegacyCorrelationStrategy(AppDbContext database)
+    : ICorrelationIdResolutionStrategy
+{
+    public string Name => "legacy-request-database";
+    public int Order => 100;
+
+    public async ValueTask<CorrelationIdResolutionResult> TryResolveAsync(
+        InboxIdentityFactoryContext context,
+        CancellationToken cancellationToken = default)
+    {
+        if (context.Payload is not LegacyRequest request)
+            return CorrelationIdResolutionResult.NotApplicable;
+
+        var correlationId = await database.LegacyRequests
+            .Where(row => row.LegacyId == request.LegacyId)
+            .Select(row => row.CorrelationId)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return string.IsNullOrWhiteSpace(correlationId)
+            ? CorrelationIdResolutionResult.NotFound
+            : CorrelationIdResolutionResult.Resolved(correlationId);
+    }
+}
+```
+
+Register strategies directly with normal DI. Scoped lifetime allows a strategy to consume
+the application's scoped `DbContext`; SquirrelBox does not require changes to that context.
+
+```csharp
+services.AddScoped<ICorrelationIdResolutionStrategy, LegacyCorrelationStrategy>();
+
+services.AddSquirrelBox(options =>
+{
+    options.AddInboxPolicy("legacy-related", policy =>
+        policy.CorrelationIdResolutionMode =
+            CorrelationIdResolutionMode.ResolveRequired);
+});
+```
+
+Resolution always prefers an incoming correlation id. `FactoryOnly` preserves the original
+behavior, `ResolveThenGenerate` evaluates strategies in `Order` and falls back to
+`ICorrelationIdFactory`, and `ResolveRequired` rejects with `MissingCorrelationId` when no
+strategy can recover the relationship. Strategy failures propagate instead of silently
+creating a different correlation id. Selection precedence is entrypoint override, named
+core policy, then `DefaultCorrelationIdResolutionMode`.
+
+The strategy name is persisted as `squirrelbox:correlation-id-resolver`, and resolved values
+use `SquirrelBoxMetadataValueSource.Resolved`. Deferred execution, outbox publication, HTTP
+response headers, and messaging metadata then carry the stored correlation id normally.
 
 ## Declared Operations
 
@@ -402,6 +461,14 @@ public async Task<ActionResult> CreatePayment(CreatePaymentRequest request)
 }
 ```
 
+An MVC entrypoint can also select correlation resolution directly:
+
+```csharp
+[HttpPost("legacy/b")]
+[SquirrelBoxInbox(CorrelationIdResolutionMode = CorrelationIdResolutionMode.ResolveRequired)]
+public IActionResult ContinueLegacyFlow(LegacyRequest request) => Ok();
+```
+
 MVC actions can also declare deferred entrypoint settings directly:
 
 ```csharp
@@ -460,6 +527,11 @@ app.MapPost("/payments", HandlePayment)
        options.PolicyName = "payments";
        options.CompletedLock = InboxCompletedLockMode.Forever;
    });
+
+app.MapPost("/legacy/b", HandleLegacyRequest)
+   .WithSquirrelBoxInbox(options =>
+       options.CorrelationIdResolutionMode =
+           CorrelationIdResolutionMode.ResolveRequired);
 
 app.MapPost("/orders/deferred", HandleDeferredOrder)
    .WithSquirrelBoxInbox(options =>
@@ -559,6 +631,15 @@ public sealed class OrdersMessageInboxProfile : InboxMessagePolicyProfile
         builder
             .ForTopic("payments")
             .WithCompletedLock(InboxCompletedLockMode.Forever);
+
+        builder
+            .Match(
+                topic: "legacy.related",
+                version: "1.0.0",
+                subscription: "legacy-consumer",
+                operation: "continue")
+            .WithCorrelationIdResolution(
+                CorrelationIdResolutionMode.ResolveRequired);
     }
 }
 ```
@@ -752,6 +833,14 @@ curl -i -X POST http://127.0.0.1:5188/orders/no-inbox \
   -H "Idempotency-Key: ignored-by-unmarked-endpoint" \
   -d "{\"customerId\":\"cust-1\",\"externalOrderId\":\"direct-1\",\"amount\":10.0}"
 
+curl -i -X POST http://127.0.0.1:5188/legacy/a \
+  -H "Content-Type: application/json" \
+  -d "{\"legacyId\":\"123\",\"value\":\"create\"}"
+
+curl -i -X POST http://127.0.0.1:5188/legacy/b \
+  -H "Content-Type: application/json" \
+  -d "{\"legacyId\":\"123\",\"value\":\"continue\"}"
+
 curl -i -X POST http://127.0.0.1:5188/orders/window \
   -H "Content-Type: application/json" \
   -d "{\"customerId\":\"cust-2\",\"externalOrderId\":\"window-1\",\"amount\":25.0}"
@@ -782,6 +871,8 @@ The test suite covers:
 - Messaging and Pigeon consume/publish adapters.
 - Mule deferred inbox and outbox execution.
 - EF Core SQL Server e2e tests using Docker.
+- Async correlation resolution through scoped application strategies across Core, HTTP, Messaging, and SQL Server.
+- A required 100% of both executable lines and branches.
 
 Run everything:
 
