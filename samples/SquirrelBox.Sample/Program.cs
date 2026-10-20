@@ -23,6 +23,8 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 });
 
 builder.Services.AddSingleton<SampleOrderStore>();
+builder.Services.AddSingleton<LegacyCorrelationStore>();
+builder.Services.AddScoped<ICorrelationIdResolutionStrategy, LegacyCorrelationStrategy>();
 builder.Services.AddSingleton<SampleOutboxPublisher>();
 builder.Services.AddSingleton<IOutboxTransportPublisher>(provider => provider.GetRequiredService<SampleOutboxPublisher>());
 builder.Services.Configure<MuleSettings>(settings =>
@@ -70,6 +72,8 @@ builder.Services
             policy.Deferred.Backoff = InboxRetryBackoff.Linear;
             policy.Deferred.InProgressTimeout = TimeSpan.FromMinutes(5);
         });
+        options.AddInboxPolicy("legacy-related", policy =>
+            policy.CorrelationIdResolutionMode = CorrelationIdResolutionMode.ResolveRequired);
         options.ScanAssemblyContaining<OrderFingerprintProfile>();
     })
     .UseInMemory();
@@ -152,6 +156,8 @@ app.MapGet("/", () => Results.Ok(new
     {
         "POST /orders/inline executes a declared operation inline.",
         "POST /orders/no-inbox writes directly and is not protected by HTTP inbox, even if Idempotency-Key is sent.",
+        "POST /legacy/a generates a correlation id and stores its legacy relationship.",
+        "POST /legacy/b resolves the correlation id from that relationship or rejects when it is missing.",
         "POST /orders/computed-key opens HTTP inbox from the bound payload and returns a computed Idempotency-Key.",
         "POST /orders/window uses a short idempotency window and accepts the same payload again after the window expires.",
         "POST /orders/forever keeps completed duplicates locked forever for payment-style entrypoints.",
@@ -176,6 +182,36 @@ app.MapPost("/orders/no-inbox", (
     var order = orders.MarkCreated(request);
     return Results.Created($"/orders/{order.Id}", new { order });
 });
+
+app.MapPost("/legacy/a", (
+        LegacyLinkedRequest request,
+        IInboxService inbox,
+        LegacyCorrelationStore correlations) =>
+    {
+        var entry = inbox.Current.Entry;
+        correlations.Store(request.LegacyId, entry.CorrelationId);
+        return Results.Ok(new LegacyCorrelationResponse(
+            request.LegacyId,
+            entry.IdempotencyKey,
+            entry.CorrelationId,
+            entry.LastTraceId,
+            entry.LastAttemptId));
+    })
+    .WithSquirrelBoxInbox();
+
+app.MapPost("/legacy/b", (
+        LegacyLinkedRequest request,
+        IInboxService inbox) =>
+    {
+        var entry = inbox.Current.Entry;
+        return Results.Ok(new LegacyCorrelationResponse(
+            request.LegacyId,
+            entry.IdempotencyKey,
+            entry.CorrelationId,
+            entry.LastTraceId,
+            entry.LastAttemptId));
+    })
+    .WithSquirrelBoxInbox(options => options.PolicyName = "legacy-related");
 
 app.MapPost("/orders/inline", async (
     CreateOrderRequest request,
@@ -612,6 +648,58 @@ public sealed class SampleOrderStore
 }
 
 /// <summary>
+/// Simulates application persistence that links legacy business ids to SquirrelBox correlation ids.
+/// </summary>
+public sealed class LegacyCorrelationStore
+{
+    private readonly ConcurrentDictionary<string, string> _correlations = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Stores the correlation id assigned to a legacy business id.
+    /// </summary>
+    /// <param name="legacyId">The legacy business id.</param>
+    /// <param name="correlationId">The SquirrelBox correlation id.</param>
+    public void Store(string legacyId, string correlationId)
+        => _correlations[legacyId] = correlationId;
+
+    /// <summary>
+    /// Attempts to find the correlation id linked to a legacy business id.
+    /// </summary>
+    /// <param name="legacyId">The legacy business id.</param>
+    /// <param name="correlationId">The linked correlation id when found.</param>
+    /// <returns><see langword="true"/> when the relationship exists.</returns>
+    public bool TryGet(string legacyId, out string correlationId)
+        => _correlations.TryGetValue(legacyId, out correlationId!);
+}
+
+/// <summary>
+/// Resolves correlation ids for related legacy sample requests.
+/// </summary>
+public sealed class LegacyCorrelationStrategy(
+    LegacyCorrelationStore correlations) : ICorrelationIdResolutionStrategy
+{
+    /// <inheritdoc />
+    public string Name => "sample-legacy-store";
+
+    /// <inheritdoc />
+    public int Order => 100;
+
+    /// <inheritdoc />
+    public ValueTask<CorrelationIdResolutionResult> TryResolveAsync(
+        InboxIdentityFactoryContext context,
+        CancellationToken cancellationToken = default)
+    {
+        if (context.Payload is not LegacyLinkedRequest request)
+            return ValueTask.FromResult(CorrelationIdResolutionResult.NotApplicable);
+
+        return ValueTask.FromResult(
+            correlations.TryGet(request.LegacyId, out var correlationId)
+                ? CorrelationIdResolutionResult.Resolved(correlationId)
+                : CorrelationIdResolutionResult.NotFound);
+    }
+}
+
+/// <summary>
 /// Sample outbox publisher that records audit messages in the sample store.
 /// </summary>
 public sealed class SampleOutboxPublisher : IOutboxTransportPublisher
@@ -666,6 +754,28 @@ public sealed record CreateOrderRequest(
     string ExternalOrderId,
     decimal Amount,
     string? Note = null);
+
+/// <summary>
+/// Request used to demonstrate correlation resolution across legacy entrypoints.
+/// </summary>
+/// <param name="LegacyId">The shared legacy business id.</param>
+/// <param name="Value">An operation-specific value.</param>
+public sealed record LegacyLinkedRequest(string LegacyId, string Value);
+
+/// <summary>
+/// Shows the effective identity assigned to a legacy sample request.
+/// </summary>
+/// <param name="LegacyId">The shared legacy business id.</param>
+/// <param name="IdempotencyKey">The operation idempotency key.</param>
+/// <param name="CorrelationId">The generated or resolved correlation id.</param>
+/// <param name="TraceId">The current intent trace id.</param>
+/// <param name="AttemptId">The current attempt id.</param>
+public sealed record LegacyCorrelationResponse(
+    string LegacyId,
+    string IdempotencyKey,
+    string CorrelationId,
+    string TraceId,
+    string AttemptId);
 
 /// <summary>
 /// Message used by Pigeon sample endpoints.
