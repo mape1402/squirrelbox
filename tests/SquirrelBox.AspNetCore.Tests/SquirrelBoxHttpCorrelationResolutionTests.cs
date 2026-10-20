@@ -59,6 +59,21 @@ public sealed class SquirrelBoxHttpCorrelationResolutionTests
         Assert.Equal(CorrelationIdResolutionMode.ResolveThenGenerate, metadata.CorrelationIdResolutionMode);
     }
 
+    [Fact]
+    public void Http_models_cover_window_alias_and_resolved_header_record_members()
+    {
+        var attribute = new SquirrelBoxInboxAttribute { WindowSeconds = 42 };
+        var headerType = typeof(SquirrelBoxInboxAttribute).Assembly.GetType(
+            "SquirrelBox.AspNetCore.SquirrelBoxHttpInbox+ResolvedHeader",
+            throwOnError: true)!;
+        var header = Activator.CreateInstance(headerType, "Correlation-Id", "abc")!;
+
+        Assert.Equal(42, attribute.WindowSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(42), attribute.EntryLifetime);
+        Assert.Equal("Correlation-Id", headerType.GetProperty("Name")!.GetValue(header));
+        Assert.Equal("abc", headerType.GetProperty("Value")!.GetValue(header));
+    }
+
     private static TestServer CreateServer()
     {
         var builder = new WebHostBuilder()

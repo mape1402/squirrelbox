@@ -114,7 +114,7 @@ public sealed class SquirrelBoxDashboardTests
     {
         using var server = CreateServer();
         using var client = server.CreateClient();
-        client.DefaultRequestHeaders.Add("Cookie", "SquirrelBoxDashboard=not-protected");
+        client.DefaultRequestHeaders.Add("Cookie", "SquirrelBox.Dashboard=not-protected");
 
         var response = await client.GetAsync("/squirrelbox/api/state");
 

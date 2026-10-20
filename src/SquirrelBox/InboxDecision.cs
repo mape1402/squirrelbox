@@ -3,11 +3,36 @@ namespace SquirrelBox;
 /// <summary>
 /// Represents the policy action SquirrelBox resolved for an inbox open result.
 /// </summary>
-/// <param name="State">The inbox open state.</param>
-/// <param name="Action">The neutral action selected by policy.</param>
-/// <param name="Entry">The inbox entry related to the decision, when available.</param>
-public sealed record InboxDecision(InboxOpenState State, InboxPolicyAction Action, InboxEntry Entry)
+public sealed record InboxDecision
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="InboxDecision"/> record.
+    /// </summary>
+    /// <param name="State">The inbox open state.</param>
+    /// <param name="Action">The neutral action selected by policy.</param>
+    /// <param name="Entry">The inbox entry related to the decision, when available.</param>
+    public InboxDecision(InboxOpenState State, InboxPolicyAction Action, InboxEntry Entry)
+    {
+        this.State = State;
+        this.Action = Action;
+        this.Entry = Entry;
+    }
+
+    /// <summary>
+    /// Gets the inbox open state.
+    /// </summary>
+    public InboxOpenState State { get; init; }
+
+    /// <summary>
+    /// Gets the neutral action selected by policy.
+    /// </summary>
+    public InboxPolicyAction Action { get; init; }
+
+    /// <summary>
+    /// Gets the inbox entry related to the decision, when available.
+    /// </summary>
+    public InboxEntry Entry { get; init; }
+
     /// <summary>
     /// Gets a value indicating whether the caller should execute the protected work.
     /// </summary>
@@ -17,4 +42,20 @@ public sealed record InboxDecision(InboxOpenState State, InboxPolicyAction Actio
     /// Gets the effective idempotency key associated with the decision, when available.
     /// </summary>
     public string EffectiveIdempotencyKey => Entry?.IdempotencyKey;
+
+    /// <summary>
+    /// Deconstructs the decision into its primary values.
+    /// </summary>
+    /// <param name="state">The inbox open state.</param>
+    /// <param name="action">The selected policy action.</param>
+    /// <param name="entry">The related inbox entry.</param>
+    public void Deconstruct(
+        out InboxOpenState state,
+        out InboxPolicyAction action,
+        out InboxEntry entry)
+    {
+        state = State;
+        action = Action;
+        entry = Entry;
+    }
 }

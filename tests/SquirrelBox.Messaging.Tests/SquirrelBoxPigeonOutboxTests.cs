@@ -168,6 +168,7 @@ public sealed class SquirrelBoxPigeonOutboxTests
         var invoker = provider.GetRequiredService<FakePigeonPublisherInvoker>();
 
         Assert.True(result.Succeeded);
+        Assert.Equal("pigeon", publisher.Transport);
         var published = Assert.Single(invoker.Published);
         Assert.False(published.IsRaw);
         Assert.Equal("orders", published.Topic);
