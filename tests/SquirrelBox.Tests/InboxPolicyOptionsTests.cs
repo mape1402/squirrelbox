@@ -11,6 +11,7 @@ public sealed class InboxPolicyOptionsTests
     [InlineData(InboxOpenState.PayloadConflict, InboxPolicyAction.Reject)]
     [InlineData(InboxOpenState.Expired, InboxPolicyAction.Reject)]
     [InlineData(InboxOpenState.MissingIdempotencyKey, InboxPolicyAction.Reject)]
+    [InlineData(InboxOpenState.MissingCorrelationId, InboxPolicyAction.Reject)]
     public void Resolve_returns_configured_action_for_each_known_open_state(
         InboxOpenState state,
         InboxPolicyAction expected)

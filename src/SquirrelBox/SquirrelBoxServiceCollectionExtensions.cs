@@ -27,6 +27,7 @@ public static class SquirrelBoxServiceCollectionExtensions
         services.TryAddScoped<ISquirrelBoxIdentityAccessor, ScopedSquirrelBoxIdentityAccessor>();
         services.TryAddSingleton<IInboxPayloadFingerprinter, DefaultInboxPayloadFingerprinter>();
         services.TryAddSingleton<ICorrelationIdFactory, DefaultCorrelationIdFactory>();
+        services.TryAddScoped<ICorrelationIdResolver, DefaultCorrelationIdResolver>();
         services.TryAddSingleton<ITraceIdFactory, DefaultTraceIdFactory>();
         services.TryAddSingleton<IAttemptIdFactory, DefaultAttemptIdFactory>();
         services.TryAddSingleton<IInboxTransactionRunner, SuppressAmbientTransactionInboxRunner>();

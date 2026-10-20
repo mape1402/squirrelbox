@@ -28,6 +28,18 @@ public static class SquirrelBoxLogEvents
     /// <summary>Inbox context entered retry state.</summary>
     public static readonly EventId InboxRetrying = new(1006, nameof(InboxRetrying));
 
+    /// <summary>Correlation id was resolved by an application strategy.</summary>
+    public static readonly EventId CorrelationIdResolved = new(1007, nameof(CorrelationIdResolved));
+
+    /// <summary>Correlation id strategies were exhausted without a value.</summary>
+    public static readonly EventId CorrelationIdResolutionExhausted = new(1008, nameof(CorrelationIdResolutionExhausted));
+
+    /// <summary>Correlation id resolution failed unexpectedly.</summary>
+    public static readonly EventId CorrelationIdResolutionFailed = new(1009, nameof(CorrelationIdResolutionFailed));
+
+    /// <summary>A required correlation id could not be resolved.</summary>
+    public static readonly EventId InboxMissingCorrelationId = new(1010, nameof(InboxMissingCorrelationId));
+
     /// <summary>Outbox envelope was enqueued.</summary>
     public static readonly EventId OutboxEnqueued = new(2000, nameof(OutboxEnqueued));
 

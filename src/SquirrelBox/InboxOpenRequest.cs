@@ -46,6 +46,11 @@ public sealed class InboxOpenRequest
     public string CorrelationIdName { get; init; }
 
     /// <summary>
+    /// Gets an optional correlation id resolution mode override.
+    /// </summary>
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; init; }
+
+    /// <summary>
     /// Gets the trace id for the current attempt.
     /// </summary>
     public string TraceId { get; init; }
@@ -127,7 +132,8 @@ public sealed class InboxOpenRequest
         string policyName = null,
         TimeSpan? entryLifetime = null,
         InboxCompletedLockMode completedLock = InboxCompletedLockMode.Default,
-        InboxDeferredPolicyOptions deferred = null)
+        InboxDeferredPolicyOptions deferred = null,
+        CorrelationIdResolutionMode correlationIdResolutionMode = CorrelationIdResolutionMode.Default)
         => new()
         {
             Source = source,
@@ -136,6 +142,7 @@ public sealed class InboxOpenRequest
             Payload = payload,
             PayloadType = typeof(TPayload).AssemblyQualifiedName,
             CorrelationId = correlationId,
+            CorrelationIdResolutionMode = correlationIdResolutionMode,
             Owner = owner,
             OwnsCompletion = ownsCompletion,
             AllowPayloadHashAsIdempotencyKey = allowPayloadHashAsIdempotencyKey,

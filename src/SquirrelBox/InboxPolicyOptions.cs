@@ -46,6 +46,11 @@ public sealed class InboxPolicyOptions
     public InboxPolicyAction MissingIdempotencyKey { get; set; } = InboxPolicyAction.Reject;
 
     /// <summary>
+    /// Gets or sets the action used when a required correlation id cannot be resolved.
+    /// </summary>
+    public InboxPolicyAction MissingCorrelationId { get; set; } = InboxPolicyAction.Reject;
+
+    /// <summary>
     /// Resolves the configured policy action for an open outcome.
     /// </summary>
     /// <param name="state">The open outcome.</param>
@@ -61,6 +66,7 @@ public sealed class InboxPolicyOptions
             InboxOpenState.PayloadConflict => PayloadConflict,
             InboxOpenState.Expired => Expired,
             InboxOpenState.MissingIdempotencyKey => MissingIdempotencyKey,
+            InboxOpenState.MissingCorrelationId => MissingCorrelationId,
             _ => InboxPolicyAction.Reject
         };
 }

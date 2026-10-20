@@ -38,5 +38,10 @@ public enum SquirrelBoxMetadataValueSource
     /// <summary>
     /// The value came from the current distributed tracing activity.
     /// </summary>
-    Activity
+    Activity,
+
+    /// <summary>
+    /// The value was resolved by an application correlation id strategy.
+    /// </summary>
+    Resolved
 }

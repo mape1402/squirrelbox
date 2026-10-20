@@ -31,6 +31,11 @@ public sealed class InboxIdempotencyPolicy
     public bool? AllowPayloadHashAsIdempotencyKey { get; set; }
 
     /// <summary>
+    /// Gets or sets the correlation id resolution mode for entries using this policy.
+    /// </summary>
+    public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
+
+    /// <summary>
     /// Gets deferred execution settings for entries using this policy.
     /// </summary>
     public InboxDeferredPolicyOptions Deferred { get; } = new();

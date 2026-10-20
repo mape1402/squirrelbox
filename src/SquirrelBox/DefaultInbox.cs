@@ -14,7 +14,7 @@ public sealed class DefaultInbox : IInboxService
     private readonly ISquirrelBoxIdentityAccessor _identityAccessor;
     private readonly SquirrelBoxOptions _options;
     private readonly IInboxPayloadHasher _payloadHasher;
-    private readonly ICorrelationIdFactory _correlationIdFactory;
+    private readonly ICorrelationIdResolver _correlationIdResolver;
     private readonly ITraceIdFactory _traceIdFactory;
     private readonly IAttemptIdFactory _attemptIdFactory;
     private readonly ISquirrelBoxEventPublisher _events;
@@ -33,7 +33,7 @@ public sealed class DefaultInbox : IInboxService
         IInboxContextAccessor contextAccessor,
         ISquirrelBoxIdentityAccessor identityAccessor,
         IInboxPayloadHasher payloadHasher,
-        ICorrelationIdFactory correlationIdFactory,
+        ICorrelationIdResolver correlationIdResolver,
         ITraceIdFactory traceIdFactory,
         IAttemptIdFactory attemptIdFactory,
         ISquirrelBoxEventPublisher events,
@@ -46,7 +46,7 @@ public sealed class DefaultInbox : IInboxService
         _contextAccessor = contextAccessor ?? throw new ArgumentNullException(nameof(contextAccessor));
         _identityAccessor = identityAccessor ?? throw new ArgumentNullException(nameof(identityAccessor));
         _payloadHasher = payloadHasher ?? throw new ArgumentNullException(nameof(payloadHasher));
-        _correlationIdFactory = correlationIdFactory ?? throw new ArgumentNullException(nameof(correlationIdFactory));
+        _correlationIdResolver = correlationIdResolver ?? throw new ArgumentNullException(nameof(correlationIdResolver));
         _traceIdFactory = traceIdFactory ?? throw new ArgumentNullException(nameof(traceIdFactory));
         _attemptIdFactory = attemptIdFactory ?? throw new ArgumentNullException(nameof(attemptIdFactory));
         _events = events ?? throw new ArgumentNullException(nameof(events));
@@ -116,7 +116,28 @@ public sealed class DefaultInbox : IInboxService
             Payload = request.Payload,
             Metadata = requestMetadata
         };
-        var correlationId = _correlationIdFactory.Create(identityFactoryContext);
+        var correlationIdResolutionMode = ResolveCorrelationIdResolutionMode(request, policy);
+        var correlationIdResolution = await _correlationIdResolver.ResolveAsync(
+            identityFactoryContext,
+            correlationIdResolutionMode,
+            cancellationToken);
+        if (correlationIdResolution.State is not CorrelationIdResolutionState.Resolved)
+        {
+            _logger.LogWarning(
+                SquirrelBoxLogEvents.InboxMissingCorrelationId,
+                "SquirrelBox inbox rejected operation because the required correlation id could not be resolved. Source={Source} Operation={Operation} Policy={Policy} IdempotencyKey={IdempotencyKey} ResolutionMode={ResolutionMode}",
+                request.Source,
+                request.Operation,
+                policy.Name,
+                idempotencyKey,
+                correlationIdResolutionMode);
+            return new InboxOpenResult(InboxOpenState.MissingCorrelationId);
+        }
+
+        requestMetadata[SquirrelBoxMetadataNames.CorrelationIdResolver] =
+            correlationIdResolution.ResolverName;
+
+        var correlationId = correlationIdResolution.CorrelationId;
         var traceId = _traceIdFactory.Create(identityFactoryContext);
         var attempt = new InboxAttempt
         {
@@ -143,9 +164,7 @@ public sealed class DefaultInbox : IInboxService
             PayloadType = request.PayloadType ?? request.Payload?.GetType().AssemblyQualifiedName,
             CorrelationId = correlationId,
             CorrelationIdName = ResolveName(request.CorrelationIdName, SquirrelBoxMetadataNames.CorrelationId),
-            CorrelationIdSource = string.IsNullOrWhiteSpace(request.CorrelationId)
-                ? SquirrelBoxMetadataValueSource.Generated
-                : SquirrelBoxMetadataValueSource.Incoming,
+            CorrelationIdSource = correlationIdResolution.Source,
             OriginalAttemptId = attempt.AttemptId,
             OriginalTraceId = attempt.TraceId,
             LastAttemptId = attempt.AttemptId,
@@ -390,6 +409,21 @@ public sealed class DefaultInbox : IInboxService
         }
 
         return _options.DefaultInboxPolicy;
+    }
+
+    private CorrelationIdResolutionMode ResolveCorrelationIdResolutionMode(
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        if (request.CorrelationIdResolutionMode is not CorrelationIdResolutionMode.Default)
+            return request.CorrelationIdResolutionMode;
+
+        if (policy.CorrelationIdResolutionMode is not CorrelationIdResolutionMode.Default)
+            return policy.CorrelationIdResolutionMode;
+
+        return _options.DefaultCorrelationIdResolutionMode is CorrelationIdResolutionMode.Default
+            ? CorrelationIdResolutionMode.FactoryOnly
+            : _options.DefaultCorrelationIdResolutionMode;
     }
 
     private DateTimeOffset? ResolveExpiration(
