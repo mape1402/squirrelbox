@@ -81,6 +81,8 @@ internal static class SquirrelBoxHttpInbox
             PayloadType = payload?.GetType().AssemblyQualifiedName,
             CorrelationId = correlationId.Value,
             CorrelationIdName = correlationId.Name,
+            CorrelationIdResolutionMode = inboxMetadata?.CorrelationIdResolutionMode ??
+                                          CorrelationIdResolutionMode.Default,
             TraceId = string.IsNullOrWhiteSpace(traceId.Value) ? httpContext.TraceIdentifier : traceId.Value,
             TraceIdName = traceId.Name,
             AttemptIdName = ResolveDefaultName(options.AttemptIdHeaderNames, SquirrelBoxMetadataNames.AttemptId),

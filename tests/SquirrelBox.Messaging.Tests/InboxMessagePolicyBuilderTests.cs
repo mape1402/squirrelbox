@@ -35,6 +35,7 @@ public sealed class InboxMessagePolicyBuilderTests
         Assert.Equal(InboxCompletedLockMode.Forever, opened.OpenResult.Entry.CompletedLock);
         Assert.Equal("builder-lane", opened.OpenResult.Entry.Deferred.Lane);
         Assert.Equal(7, opened.OpenResult.Entry.Deferred.MaxAttempts);
+        Assert.Equal(SquirrelBoxMetadataValueSource.Generated, opened.OpenResult.Entry.CorrelationIdSource);
     }
 
     [Fact]
@@ -68,6 +69,7 @@ public sealed class BuilderPolicyProfile : InboxMessagePolicyProfile
             .UseCorePolicy("core-policy")
             .WithEntryLifetime(TimeSpan.FromMinutes(7))
             .WithCompletedLock(InboxCompletedLockMode.Forever)
+            .WithCorrelationIdResolution(CorrelationIdResolutionMode.ResolveThenGenerate)
             .DeferExecution()
             .WithDeferred(options =>
             {

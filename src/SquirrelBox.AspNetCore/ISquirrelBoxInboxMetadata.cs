@@ -26,6 +26,11 @@ public interface ISquirrelBoxInboxMetadata
     InboxCompletedLockMode CompletedLock { get; }
 
     /// <summary>
+    /// Gets the correlation id resolution mode selected by the entrypoint.
+    /// </summary>
+    CorrelationIdResolutionMode CorrelationIdResolutionMode { get; }
+
+    /// <summary>
     /// Gets an optional execution mode override selected by the entrypoint.
     /// </summary>
     InboxExecutionMode? ExecutionMode { get; }

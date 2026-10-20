@@ -94,6 +94,7 @@ public sealed class DefaultInboxMessageService : IInboxMessageService
             PayloadType = context.Payload?.GetType().AssemblyQualifiedName,
             CorrelationId = correlationId.Value,
             CorrelationIdName = correlationId.Name,
+            CorrelationIdResolutionMode = policy.CorrelationIdResolutionMode,
             TraceId = traceId.Value,
             TraceIdName = traceId.Name,
             AttemptIdName = SquirrelBoxMetadataNames.MetadataSection,
