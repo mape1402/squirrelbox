@@ -122,6 +122,10 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
                 PigeonConsumeDecision.Defer,
                 "SquirrelBox scheduled the Pigeon consumer for deferred execution.")
             {
+                Outcome = new PigeonConsumeOutcome
+                {
+                    Kind = PigeonConsumeOutcomeKind.Deferred
+                },
                 Metadata = CreateDecisionMetadata(open.EffectiveMetadata)
             };
         }
@@ -204,11 +208,33 @@ public sealed class SquirrelBoxPigeonDecisionInterceptor : IConsumeDecisionInter
             InboxPolicyAction.Reject or InboxPolicyAction.Fail => _options.RejectedDecision,
             _ => _options.RejectedDecision
         };
+        var outcomeKind = decision.Action switch
+        {
+            InboxPolicyAction.Skip => PigeonConsumeOutcomeKind.Skipped,
+            InboxPolicyAction.Replay => PigeonConsumeOutcomeKind.AlreadyProcessed,
+            InboxPolicyAction.Retry or InboxPolicyAction.Reopen => PigeonConsumeOutcomeKind.RetryRequested,
+            InboxPolicyAction.Reject or InboxPolicyAction.Fail => PigeonConsumeOutcomeKind.Rejected,
+            _ => PigeonConsumeOutcomeKind.Rejected
+        };
+        var reason = $"SquirrelBox inbox decision '{decision.Action}' for state '{decision.State}'.";
 
         return new PigeonConsumeDecisionResult(
             pigeonDecision,
-            $"SquirrelBox inbox decision '{decision.Action}' for state '{decision.State}'.")
+            reason)
         {
+            Outcome = new PigeonConsumeOutcome
+            {
+                Kind = outcomeKind,
+                Failure = outcomeKind == PigeonConsumeOutcomeKind.Rejected
+                    ? new PigeonConsumeFailure
+                    {
+                        Code = $"SquirrelBox.Inbox.{decision.State}",
+                        Type = "SquirrelBox.Inbox",
+                        Message = reason,
+                        IsRetryable = false
+                    }
+                    : null
+            },
             Metadata = CreateDecisionMetadata(_metadataEnricher.Create(_inbox.LastContext?.Identity))
         };
     }

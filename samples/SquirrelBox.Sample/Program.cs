@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Configuration;
 using Mule;
 using Mule.InMemory;
+using Pigeon.Messaging.Consuming.Dispatching;
 using Pigeon.Messaging.Consuming.Management;
 using Pigeon.Messaging.Contracts;
 using Pigeon.Messaging.InMemory;
@@ -23,6 +24,7 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 });
 
 builder.Services.AddSingleton<SampleOrderStore>();
+builder.Services.AddSingleton<SamplePigeonDecisionStore>();
 builder.Services.AddSingleton<LegacyCorrelationStore>();
 builder.Services.AddScoped<ICorrelationIdResolutionStrategy, LegacyCorrelationStrategy>();
 builder.Services.AddSingleton<SampleOutboxPublisher>();
@@ -110,6 +112,7 @@ var pigeon = builder.Services.AddPigeon(builder.Configuration, settings =>
 
     settings.UseInMemoryBroker();
 });
+pigeon.AddConsumeDecisionObserver<SamplePigeonDecisionObserver>();
 
 builder.Services.AddSquirrelBoxPigeon(options =>
 {
@@ -167,6 +170,7 @@ app.MapGet("/", () => Results.Ok(new
         "POST /orders/deferred-failing fails through all attempts and ends as Failed.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
+        "GET /pigeon/decisions shows terminal SquirrelBox decisions observed by Pigeon.",
         "POST /outbox/direct enqueues transport-agnostic sample outbox work.",
         "GET /orders shows order state.",
         "GET /orders/audits shows sample outbox audit state.",
@@ -349,6 +353,9 @@ app.MapPost("/pigeon/deferred", async (
     await producer.PublishAsync(message, SamplePigeonRoutes.DeferredTopic, SemanticVersion.Default, cancellationToken);
     return Results.Accepted($"/orders/{message.OrderId}", new { message.OrderId, topic = SamplePigeonRoutes.DeferredTopic });
 });
+
+app.MapGet("/pigeon/decisions", (SamplePigeonDecisionStore decisions)
+    => Results.Ok(decisions.List()));
 
 app.MapPost("/outbox/direct", async (
     OrderAuditMessage message,
@@ -573,6 +580,82 @@ public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
             .UseCorePolicy("pigeon-deferred");
     }
 }
+
+/// <summary>
+/// Observes terminal Pigeon consume decisions emitted by the SquirrelBox inbox adapter.
+/// </summary>
+public sealed class SamplePigeonDecisionObserver(
+    SamplePigeonDecisionStore decisions) : IConsumeDecisionObserver
+{
+    /// <inheritdoc />
+    public ValueTask ObserveAsync(
+        ConsumeDecisionObservation observation,
+        CancellationToken cancellationToken = default)
+    {
+        SquirrelBoxMessageMetadata.TryReadFrom(
+            observation.Result.Metadata,
+            out var metadata);
+        decisions.Record(new SamplePigeonDecisionSnapshot(
+            observation.Context.Topic,
+            observation.Context.Subscription,
+            observation.Result.Decision.ToString(),
+            observation.Result.Outcome?.Kind.ToString(),
+            observation.Result.Outcome?.Failure?.Code,
+            metadata.IdempotencyKey,
+            metadata.CorrelationId,
+            metadata.AttemptId,
+            metadata.TraceId,
+            DateTimeOffset.UtcNow));
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Stores terminal Pigeon consume decisions for the sample diagnostics endpoint.
+/// </summary>
+public sealed class SamplePigeonDecisionStore
+{
+    private readonly ConcurrentQueue<SamplePigeonDecisionSnapshot> _decisions = new();
+
+    /// <summary>
+    /// Records an observed terminal consume decision.
+    /// </summary>
+    /// <param name="decision">The observed decision snapshot.</param>
+    public void Record(SamplePigeonDecisionSnapshot decision)
+        => _decisions.Enqueue(decision);
+
+    /// <summary>
+    /// Lists the terminal decisions observed by the sample.
+    /// </summary>
+    /// <returns>The current decision snapshots.</returns>
+    public IReadOnlyCollection<SamplePigeonDecisionSnapshot> List()
+        => _decisions.ToArray();
+}
+
+/// <summary>
+/// Captures the outcome and SquirrelBox identity visible to a Pigeon decision observer.
+/// </summary>
+/// <param name="Topic">The consumed topic.</param>
+/// <param name="Subscription">The consumer subscription.</param>
+/// <param name="Decision">The broker settlement decision.</param>
+/// <param name="Outcome">The transport-neutral semantic outcome.</param>
+/// <param name="FailureCode">The structured failure code, when rejected.</param>
+/// <param name="IdempotencyKey">The effective idempotency key.</param>
+/// <param name="CorrelationId">The stable correlation id.</param>
+/// <param name="AttemptId">The current attempt id.</param>
+/// <param name="TraceId">The current trace id.</param>
+/// <param name="ObservedOnUtc">The observation timestamp.</param>
+public sealed record SamplePigeonDecisionSnapshot(
+    string Topic,
+    string Subscription,
+    string Decision,
+    string? Outcome,
+    string? FailureCode,
+    string? IdempotencyKey,
+    string? CorrelationId,
+    string? AttemptId,
+    string? TraceId,
+    DateTimeOffset ObservedOnUtc);
 
 /// <summary>
 /// In-memory order store used by the sample application.
