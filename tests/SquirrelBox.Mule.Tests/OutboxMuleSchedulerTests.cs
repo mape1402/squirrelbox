@@ -72,16 +72,11 @@ public sealed class OutboxMuleSchedulerTests
             envelopeId = envelope.Id;
         }
 
-        var publisher = host.Services.GetRequiredService<TestOutboxPublisher>();
-        await publisher.WaitAsync();
-
-        using (var scope = host.Services.CreateScope())
-        {
-            var stored = await scope.ServiceProvider.GetRequiredService<IOutboxService>().GetAsync(envelopeId);
-            Assert.Equal(OutboxStatus.Published, stored.Status);
-        }
+        var stored = await WaitForOutboxStatusAsync(host.Services, envelopeId, OutboxStatus.Published);
+        Assert.Equal(OutboxStatus.Published, stored.Status);
 
         await host.StopAsync();
+        var publisher = host.Services.GetRequiredService<TestOutboxPublisher>();
         Assert.Equal(envelopeId, publisher.Published.Single().Id);
         Assert.Contains(host.Services.GetRequiredService<IInMemoryMule>().Actions, action => action.Status == DurableActionStatus.Completed);
     }
@@ -171,12 +166,30 @@ public sealed class OutboxMuleSchedulerTests
             payload);
     }
 
+    private static async Task<OutboxEnvelope> WaitForOutboxStatusAsync(
+        IServiceProvider services,
+        Ulid envelopeId,
+        OutboxStatus status)
+    {
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            using var scope = services.CreateScope();
+            var envelope = await scope.ServiceProvider.GetRequiredService<IOutboxService>()
+                .GetAsync(envelopeId);
+
+            if (envelope.Status == status)
+                return envelope;
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException($"Outbox envelope '{envelopeId}' did not reach '{status}'.");
+    }
+
     private sealed record OutboxMessage(string Id);
 
     private sealed class TestOutboxPublisher : IOutboxTransportPublisher
     {
-        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         public string Transport => "test";
 
         public IList<OutboxEnvelope> Published { get; } = [];
@@ -186,11 +199,7 @@ public sealed class OutboxMuleSchedulerTests
             CancellationToken cancellationToken = default)
         {
             Published.Add(envelope);
-            _completion.TrySetResult();
             return ValueTask.FromResult(OutboxPublishResult.Success);
         }
-
-        public Task WaitAsync()
-            => _completion.Task.WaitAsync(TimeSpan.FromSeconds(3));
     }
 }
