@@ -55,12 +55,19 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         }
         catch (DbUpdateException)
         {
-            dbContext.Entry(record).State = EntityState.Detached;
-            if (attemptRecord is not null)
-                dbContext.Entry(attemptRecord).State = EntityState.Detached;
+            using var duplicateContext = _dbContextFactory.CreateDbContext();
+            var existing = await FindByBusinessKeyForUpdateAsync(
+                duplicateContext,
+                entry,
+                cancellationToken);
 
-            var existing = await FindByBusinessKeyForUpdateAsync(dbContext, entry, cancellationToken);
-            return await ResolveDuplicateAsync(dbContext, existing, entry, cancellationToken);
+            if (existing is null)
+                throw;
+
+            if (existing.Id == entry.Id)
+                return RecoverCommittedOpen(existing, entry);
+
+            return await ResolveDuplicateAsync(duplicateContext, existing, entry, cancellationToken);
         }
     }
 
@@ -188,11 +195,27 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         InboxEntry entry,
         CancellationToken cancellationToken)
         => await dbContext.Set<SquirrelBoxInboxEntryRecord>()
-            .SingleAsync(
+            .SingleOrDefaultAsync(
                 record => record.Source == entry.Source &&
                           record.Operation == entry.Operation &&
                           record.IdempotencyKey == entry.IdempotencyKey,
                 cancellationToken);
+
+    private static InboxOpenResult RecoverCommittedOpen(
+        SquirrelBoxInboxEntryRecord existing,
+        InboxEntry incoming)
+    {
+        var entry = ToEntry(existing);
+        if (incoming.CurrentAttempt is not null)
+        {
+            entry.CurrentAttempt = CloneAttempt(
+                incoming.CurrentAttempt,
+                existing.Id,
+                InboxOpenState.Opened);
+        }
+
+        return new InboxOpenResult(InboxOpenState.Opened, entry: entry);
+    }
 
     private static async Task<SquirrelBoxInboxEntryRecord> FindByIdAsync(
         TDbContext dbContext,
