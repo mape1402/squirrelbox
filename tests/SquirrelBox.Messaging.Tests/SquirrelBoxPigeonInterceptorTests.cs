@@ -77,6 +77,11 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             "MissingIdempotencyKey",
             decision.Reason,
             StringComparison.Ordinal);
+        Assert.Equal(PigeonConsumeOutcomeKind.Rejected, decision.Outcome.Kind);
+        Assert.Equal("SquirrelBox.Inbox.MissingIdempotencyKey", decision.Outcome.Failure.Code);
+        Assert.Equal("SquirrelBox.Inbox", decision.Outcome.Failure.Type);
+        Assert.Equal(decision.Reason, decision.Outcome.Failure.Message);
+        Assert.False(decision.Outcome.Failure.IsRetryable);
         Assert.Empty(decision.Metadata);
     }
 
@@ -97,6 +102,8 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         var decision = await second.InterceptAsync(CreateContext(secondScope.ServiceProvider));
 
         Assert.Equal(PigeonConsumeDecision.AckAndSkip, decision.Decision);
+        Assert.Equal(PigeonConsumeOutcomeKind.AlreadyProcessed, decision.Outcome.Kind);
+        Assert.Null(decision.Outcome.Failure);
         Assert.Contains("DuplicateCompleted", decision.Reason, StringComparison.Ordinal);
     }
 
@@ -195,15 +202,17 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     }
 
     [Theory]
-    [InlineData(InboxPolicyAction.Skip, PigeonConsumeDecision.AckAndSkip)]
-    [InlineData(InboxPolicyAction.Replay, PigeonConsumeDecision.AckAndSkip)]
-    [InlineData(InboxPolicyAction.Retry, PigeonConsumeDecision.Retry)]
-    [InlineData(InboxPolicyAction.Reopen, PigeonConsumeDecision.Retry)]
-    [InlineData(InboxPolicyAction.Reject, PigeonConsumeDecision.Reject)]
-    [InlineData(InboxPolicyAction.Fail, PigeonConsumeDecision.Reject)]
+    [InlineData(InboxPolicyAction.Skip, PigeonConsumeDecision.AckAndSkip, PigeonConsumeOutcomeKind.Skipped, false)]
+    [InlineData(InboxPolicyAction.Replay, PigeonConsumeDecision.AckAndSkip, PigeonConsumeOutcomeKind.AlreadyProcessed, false)]
+    [InlineData(InboxPolicyAction.Retry, PigeonConsumeDecision.Retry, PigeonConsumeOutcomeKind.RetryRequested, false)]
+    [InlineData(InboxPolicyAction.Reopen, PigeonConsumeDecision.Retry, PigeonConsumeOutcomeKind.RetryRequested, false)]
+    [InlineData(InboxPolicyAction.Reject, PigeonConsumeDecision.Reject, PigeonConsumeOutcomeKind.Rejected, true)]
+    [InlineData(InboxPolicyAction.Fail, PigeonConsumeDecision.Reject, PigeonConsumeOutcomeKind.Rejected, true)]
     public void DecisionInterceptor_maps_neutral_decisions_to_pigeon_decisions(
         InboxPolicyAction action,
-        PigeonConsumeDecision expected)
+        PigeonConsumeDecision expected,
+        PigeonConsumeOutcomeKind expectedOutcome,
+        bool hasFailure)
     {
         using var provider = CreateProvider();
         using var scope = provider.CreateScope();
@@ -216,6 +225,8 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             [new InboxDecision(InboxOpenState.DuplicateInProgress, action, new InboxEntry())]);
 
         Assert.Equal(expected, result.Decision);
+        Assert.Equal(expectedOutcome, result.Outcome.Kind);
+        Assert.Equal(hasFailure, result.Outcome.Failure is not null);
         Assert.Contains(action.ToString(), result.Reason, StringComparison.Ordinal);
     }
 
@@ -233,6 +244,8 @@ public sealed class SquirrelBoxPigeonInterceptorTests
             [new InboxDecision(InboxOpenState.DuplicateInProgress, (InboxPolicyAction)999, new InboxEntry())]);
 
         Assert.Equal(PigeonConsumeDecision.Reject, result.Decision);
+        Assert.Equal(PigeonConsumeOutcomeKind.Rejected, result.Outcome.Kind);
+        Assert.Equal("SquirrelBox.Inbox.DuplicateInProgress", result.Outcome.Failure.Code);
     }
 
     [Fact]
@@ -357,6 +370,8 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         var scheduler = scope.ServiceProvider.GetRequiredService<FakeInboxMuleScheduler>();
 
         Assert.Equal(PigeonConsumeDecision.Defer, result.Decision);
+        Assert.Equal(PigeonConsumeOutcomeKind.Deferred, result.Outcome.Kind);
+        Assert.Null(result.Outcome.Failure);
         Assert.Single(scheduler.Payloads);
         var envelope = Assert.IsType<PigeonConsumeEnvelope>(scheduler.Payloads.Single());
         Assert.Equal("orders", envelope.Topic);
