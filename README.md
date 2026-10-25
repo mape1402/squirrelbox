@@ -28,11 +28,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="4.0.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="4.0.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="4.0.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="4.0.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="4.0.0" />
+<PackageReference Include="SquirrelBox" Version="4.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="4.2.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="4.2.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="4.2.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="4.2.0" />
 ```
 
 ## Getting Started
@@ -703,7 +703,7 @@ Pigeon.
 
 ## Pigeon
 
-`SquirrelBox.Messaging.Pigeon` targets Pigeon 4.0.0 and integrates with consume and publish interceptors.
+`SquirrelBox.Messaging.Pigeon` targets Pigeon 4.1.0 and integrates with consume, publish, and terminal-decision observation.
 
 ```csharp
 services.AddSquirrelBoxMessaging(options =>
@@ -723,6 +723,40 @@ Consume:
 - Decision interceptor opens the inbox before the consumer handler only when a messaging inbox profile matches the topic/version/subscription/operation.
 - Execution interceptor completes or fails the inbox after the handler.
 - Deferred replay uses `IPigeonConsumerInvoker`.
+- Terminal decisions include a typed `PigeonConsumeOutcome`: in-progress duplicates are `Skipped`, completed duplicates are `AlreadyProcessed`, rejected inbox decisions are `Rejected`, and durable scheduling is `Deferred`.
+- Rejected outcomes include `PigeonConsumeFailure` with a stable `SquirrelBox.Inbox.{InboxOpenState}` code.
+- The complete structured `SquirrelBoxMetadata` section is available to Pigeon observers before broker settlement.
+
+Register an observer when an orchestrator, request/reply adapter, or diagnostics component must react to a terminal inbox decision:
+
+```csharp
+var pigeon = services.AddPigeon(configuration, settings =>
+{
+    settings.UseInMemoryBroker(); // Or another Pigeon transport.
+});
+
+pigeon.AddConsumeDecisionObserver<WorkflowDecisionObserver>(
+    ObserverFailureBehavior.Fail);
+
+public sealed class WorkflowDecisionObserver : IConsumeDecisionObserver
+{
+    public async ValueTask ObserveAsync(
+        ConsumeDecisionObservation observation,
+        CancellationToken cancellationToken = default)
+    {
+        SquirrelBoxMessageMetadata.TryReadFrom(
+            observation.Result.Metadata,
+            out var metadata);
+
+        await PublishTerminalCallbackAsync(
+            observation.Result.Outcome,
+            metadata,
+            cancellationToken);
+    }
+}
+```
+
+Pigeon invokes the observer in the active message scope before applying `AckAndSkip`, `Reject`, `Retry`, or `Defer`. With `ObserverFailureBehavior.Fail`, an observer failure prevents the original settlement and requests redelivery when the transport supports it. SquirrelBox does not register an orchestrator-specific observer; the host owns that adapter.
 
 Messaging policies can select core policies or configure deferred retry settings directly:
 
@@ -872,7 +906,7 @@ The test suite covers:
 - Mule deferred inbox and outbox execution.
 - EF Core SQL Server e2e tests using Docker.
 - Async correlation resolution through scoped application strategies across Core, HTTP, Messaging, and SQL Server.
-- A required 100% of both executable lines and branches.
+- A single total coverage badge, with CI independently requiring 100% of executable lines and branches.
 
 Run everything:
 
