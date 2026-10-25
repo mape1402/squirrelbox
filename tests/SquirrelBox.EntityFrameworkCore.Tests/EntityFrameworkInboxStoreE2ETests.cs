@@ -10,6 +10,78 @@ namespace SquirrelBox.EntityFrameworkCore.Tests;
 public sealed class EntityFrameworkInboxStoreE2ETests
 {
     [Fact]
+    public async Task SqlServer_store_recovers_an_already_committed_open_without_duplicating_the_attempt()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+
+        using var scope = provider.CreateScope();
+        var inbox = scope.ServiceProvider.GetRequiredService<IInboxService>();
+        var store = scope.ServiceProvider.GetRequiredService<IInboxStore>();
+        var opened = await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+            "http",
+            "POST /orders",
+            "committed-open",
+            new TestPayload("committed-open")));
+
+        var recovered = await store.TryOpenAsync(opened.Entry);
+
+        Assert.Equal(InboxOpenState.Opened, recovered.State);
+        Assert.Equal(opened.Entry.Id, recovered.Entry.Id);
+        Assert.Equal(opened.EffectiveAttemptId, recovered.EffectiveAttemptId);
+        var attempts = await scope.ServiceProvider.GetRequiredService<TestInboxDbContext>()
+            .Set<SquirrelBoxInboxAttemptRecord>()
+            .Where(attempt => attempt.InboxEntryId == opened.Entry.Id)
+            .ToArrayAsync();
+        Assert.Single(attempts);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_does_not_misclassify_an_unrelated_primary_key_violation_as_a_duplicate()
+    {
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(connectionString);
+        await EnsureDatabaseAsync(provider);
+
+        using var scope = provider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IInboxStore>();
+        var now = DateTimeOffset.UtcNow;
+        var original = new InboxEntry
+        {
+            Id = Ulid.NewUlid(),
+            Source = "http",
+            Operation = "POST /orders",
+            IdempotencyKey = "original-key",
+            IdempotencyKeySource = InboxIdempotencyKeySource.Explicit,
+            Status = InboxStatus.Started,
+            ExecutionMode = InboxExecutionMode.Inline,
+            PolicyName = "default",
+            CreatedOnUtc = now,
+            UpdatedOnUtc = now
+        };
+        await store.TryOpenAsync(original);
+        var recovered = await store.TryOpenAsync(original);
+        var collision = new InboxEntry
+        {
+            Id = original.Id,
+            Source = "http",
+            Operation = "POST /other",
+            IdempotencyKey = "different-key",
+            IdempotencyKeySource = InboxIdempotencyKeySource.Explicit,
+            Status = InboxStatus.Started,
+            ExecutionMode = InboxExecutionMode.Inline,
+            PolicyName = "default",
+            CreatedOnUtc = now,
+            UpdatedOnUtc = now
+        };
+
+        Assert.Equal(InboxOpenState.Opened, recovered.State);
+        Assert.Null(recovered.Entry.CurrentAttempt);
+        await Assert.ThrowsAsync<DbUpdateException>(() => store.TryOpenAsync(collision).AsTask());
+    }
+
+    [Fact]
     public async Task SqlServer_store_reserves_before_business_execution_and_deduplicates_concurrent_requests()
     {
         var connectionString = CreateIsolatedConnectionString();
