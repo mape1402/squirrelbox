@@ -77,7 +77,7 @@ else {
 $badge = [ordered] @{
     schemaVersion = 1
     label = "Coverage"
-    message = ("lines {0:N2}% | branches {1:N2}%" -f $linePercent, $branchPercent)
+    message = ("{0:N2}%" -f $coveragePercent)
     color = $color
 }
 

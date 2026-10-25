@@ -4,6 +4,25 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.2.0] - 2026-10-25
+
+### Added
+
+- Added typed Pigeon 4.1 terminal consume outcomes for skipped, replayed, retried, rejected, and deferred inbox decisions.
+- Added broker-level integration coverage proving duplicate messages expose `AlreadyProcessed` to observers before settlement while preserving grouped SquirrelBox metadata.
+- Added sample diagnostics for inspecting terminal Pigeon inbox decisions.
+
+### Changed
+
+- Updated `SquirrelBox.Messaging.Pigeon` to Pigeon 4.1.0 and documented terminal-decision observation.
+- Changed the coverage badge to show one total percentage while CI continues to enforce line and branch coverage independently.
+- Updated package references and getting-started examples for 4.2.0.
+
+### Fixed
+
+- Fixed EF Core inbox reservation recovery after an ambiguous committed write by resolving the stored entry with a fresh `DbContext`.
+- Fixed duplicate-key handling so only matching inbox business-key collisions are recovered; unrelated database constraint failures are rethrown.
+
 ## [v4.1.0] - 2026-10-20
 
 ### Added
