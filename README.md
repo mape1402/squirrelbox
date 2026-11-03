@@ -703,7 +703,7 @@ Pigeon.
 
 ## Pigeon
 
-`SquirrelBox.Messaging.Pigeon` targets Pigeon 4.1.0 and integrates with consume, publish, and terminal-decision observation.
+`SquirrelBox.Messaging.Pigeon` targets Pigeon 4.2.0 and integrates with consume, publish, and terminal-decision observation.
 
 ```csharp
 services.AddSquirrelBoxMessaging(options =>
@@ -790,6 +790,45 @@ Publish:
 - Durable Pigeon outbox replay also verifies the serialized `WrappedPayload<T>.Metadata` body and repairs it before publishing when the durable envelope has `SquirrelBoxMetadata` but the body does not.
 - Mule later publishes through `IPigeonPublisherInvoker` without rerunning producer interceptors, publish decision interceptors, or Pigeon's internal outbox logic.
 - Normal and raw publish flows are supported.
+
+### Durable callbacks
+
+When a consumer publishes a callback through Pigeon's normal producer pipeline, SquirrelBox
+persists the callback before the consume execution interceptor marks the inbox entry as completed:
+
+```text
+consumer executes
+  -> callback enters Pigeon publish pipeline
+  -> SquirrelBox persists outbox envelope and Mule action
+  -> publish returns Skip
+  -> inbox becomes Completed
+  -> Mule publishes the callback with retries
+```
+
+The host decides which publishes require this guarantee. For example, only callback topics can
+be selected without coupling SquirrelBox to an orchestrator:
+
+```csharp
+services.AddSquirrelBoxPigeon(options =>
+{
+    options.EnableOutbox = true;
+    options.OutboxPredicate = context =>
+        context.Route?.Topic?.EndsWith(".replies", StringComparison.Ordinal) == true;
+});
+```
+
+If outbox persistence throws, the Pigeon execution interceptor marks the current inline inbox
+entry as `Failed`; it is not left completed without a durable callback. If broker publication
+fails later, Mule retries the outbox action while the successfully executed inbox entry remains
+`Completed`. The callback receiver must therefore process repeated callbacks idempotently.
+
+A completed duplicate produces `AckAndSkip` with `PigeonConsumeOutcomeKind.AlreadyProcessed`.
+It does not execute the consumer again and does not synthesize a business response. The original
+durable callback remains the authoritative result.
+
+Pigeon currently deserializes a delivery before consume decision interceptors run. A malformed
+payload therefore creates no SquirrelBox inbox entry; broker retry/dead-letter handling and any
+Pigeon pre-dispatch failure observer own that failure.
 
 ## Mule
 
@@ -888,6 +927,19 @@ curl -i -X POST http://127.0.0.1:5188/pigeon/inline \
   -H "Content-Type: application/json" \
   -d "{\"orderId\":\"pigeon-inline-1\",\"customerId\":\"cust-4\",\"amount\":12.50}"
 
+# Send this request twice. The consumer executes once, the callback is outboxed once,
+# and the second delivery is observed as AlreadyProcessed.
+curl -i -X POST http://127.0.0.1:5188/pigeon/callback \
+  -H "Content-Type: application/json" \
+  -d "{\"orderId\":\"callback-1\",\"customerId\":\"cust-5\",\"amount\":18.75}"
+
+curl -i -X POST http://127.0.0.1:5188/pigeon/callback \
+  -H "Content-Type: application/json" \
+  -d "{\"orderId\":\"callback-1\",\"customerId\":\"cust-5\",\"amount\":18.75}"
+
+curl http://127.0.0.1:5188/pigeon/callbacks
+curl http://127.0.0.1:5188/pigeon/decisions
+
 curl -i -X POST http://127.0.0.1:5188/outbox/direct \
   -H "Content-Type: application/json" \
   -d "{\"orderId\":\"audit-1\",\"reason\":\"manual-check\"}"
@@ -903,6 +955,7 @@ The test suite covers:
 - In-memory inbox/outbox storage.
 - ASP.NET Core idempotency and dashboard auth/state.
 - Messaging and Pigeon consume/publish adapters.
+- Pigeon callback durability, outbox persistence ordering, Mule retry, and completed-duplicate acknowledgement.
 - Mule deferred inbox and outbox execution.
 - EF Core SQL Server e2e tests using Docker.
 - Async correlation resolution through scoped application strategies across Core, HTTP, Messaging, and SQL Server.
