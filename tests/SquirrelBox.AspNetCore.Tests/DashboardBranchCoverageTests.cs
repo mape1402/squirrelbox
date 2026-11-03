@@ -167,6 +167,53 @@ public sealed class DashboardBranchCoverageTests
         Assert.Null(task.GetType().GetProperty("Result")!.GetValue(task));
     }
 
+    [Fact]
+    public async Task Dashboard_event_stream_writes_published_event_until_request_is_cancelled()
+    {
+        var services = new ServiceCollection();
+        services.AddSquirrelBox().UseInMemory();
+        services.AddSquirrelBoxDashboard(options =>
+            options.Authentication.Mode = SquirrelBoxDashboardAuthenticationMode.AspNetCoreAuthentication);
+        using var provider = services.BuildServiceProvider();
+        using var cancellation = new CancellationTokenSource();
+        await using var body = new MemoryStream();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = provider,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.Name, "operator")],
+                "test")),
+            RequestAborted = cancellation.Token
+        };
+        context.Response.Body = body;
+        var method = EndpointsType.GetMethod(
+            "HandleEventStreamAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var streamTask = (Task)method.Invoke(null, [context])!;
+
+        await Task.Delay(25);
+        await provider.GetRequiredService<ISquirrelBoxEventPublisher>()
+            .PublishAsync(new SquirrelBoxEvent
+            {
+                Name = "InboxCompleted",
+                Category = "Inbox",
+                SubjectId = "entry-1",
+                Status = "Completed",
+                OccurredOnUtc = DateTimeOffset.UtcNow
+            });
+        await WaitUntilAsync(() => body.Length > 0);
+        await cancellation.CancelAsync();
+        await streamTask;
+
+        body.Position = 0;
+        using var reader = new StreamReader(body);
+        var content = await reader.ReadToEndAsync();
+        Assert.Equal("text/event-stream; charset=utf-8", context.Response.ContentType);
+        Assert.Contains("event: squirrelbox", content, StringComparison.Ordinal);
+        Assert.Contains("InboxCompleted", content, StringComparison.Ordinal);
+        Assert.Contains("entry-1", content, StringComparison.Ordinal);
+    }
+
     private static TestServer CreateServer(
         string pattern = "/squirrelbox",
         ISquirrelBoxDashboardAuthenticator customAuthenticator = null,
@@ -209,6 +256,20 @@ public sealed class DashboardBranchCoverageTests
         services.AddDataProtection();
         services.AddSingleton<IOptions<SquirrelBoxDashboardOptions>>(Options.Create(new SquirrelBoxDashboardOptions()));
         return services.BuildServiceProvider();
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var timeout = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < timeout)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("The dashboard event stream did not write the published event.");
     }
 
     private sealed class MissingDisplayNameAuthenticator : ISquirrelBoxDashboardAuthenticator
