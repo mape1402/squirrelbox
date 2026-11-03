@@ -25,6 +25,7 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 
 builder.Services.AddSingleton<SampleOrderStore>();
 builder.Services.AddSingleton<SamplePigeonDecisionStore>();
+builder.Services.AddSingleton<SamplePigeonCallbackStore>();
 builder.Services.AddSingleton<LegacyCorrelationStore>();
 builder.Services.AddScoped<ICorrelationIdResolutionStrategy, LegacyCorrelationStrategy>();
 builder.Services.AddSingleton<SampleOutboxPublisher>();
@@ -147,6 +148,36 @@ pigeon.AddConsumeHandler<OrderMessage>(
         return Task.CompletedTask;
     });
 
+pigeon.AddConsumeHandler<OrderCallbackRequest>(
+    SamplePigeonRoutes.CallbackRequestTopic,
+    SemanticVersion.Default,
+    "callback-service",
+    async (context, message) =>
+    {
+        context.Services.GetRequiredService<SamplePigeonCallbackStore>()
+            .RecordExecution(message.OrderId);
+        await context.Services.GetRequiredService<IProducer>()
+            .PublishAsync(
+                new OrderCallbackReply(
+                    message.OrderId,
+                    "accepted",
+                    DateTimeOffset.UtcNow),
+                SamplePigeonRoutes.CallbackReplyTopic,
+                SemanticVersion.Default,
+                context.CancellationToken);
+    });
+
+pigeon.AddConsumeHandler<OrderCallbackReply>(
+    SamplePigeonRoutes.CallbackReplyTopic,
+    SemanticVersion.Default,
+    "callback-client",
+    (context, message) =>
+    {
+        context.Services.GetRequiredService<SamplePigeonCallbackStore>()
+            .RecordReply(message);
+        return Task.CompletedTask;
+    });
+
 var app = builder.Build();
 
 app.UseSquirrelBox();
@@ -170,6 +201,8 @@ app.MapGet("/", () => Results.Ok(new
         "POST /orders/deferred-failing fails through all attempts and ends as Failed.",
         "POST /pigeon/inline publishes a message consumed inline through Pigeon.",
         "POST /pigeon/deferred publishes a message consumed later through Mule and Pigeon replay.",
+        "POST /pigeon/callback publishes an inbox-protected request whose callback is delivered through SquirrelBox Outbox and Mule.",
+        "GET /pigeon/callbacks shows callback executions and durable replies.",
         "GET /pigeon/decisions shows terminal SquirrelBox decisions observed by Pigeon.",
         "POST /outbox/direct enqueues transport-agnostic sample outbox work.",
         "GET /orders shows order state.",
@@ -354,6 +387,33 @@ app.MapPost("/pigeon/deferred", async (
     return Results.Accepted($"/orders/{message.OrderId}", new { message.OrderId, topic = SamplePigeonRoutes.DeferredTopic });
 });
 
+app.MapPost("/pigeon/callback", async (
+    OrderCallbackRequest message,
+    IProducer producer,
+    CancellationToken cancellationToken) =>
+{
+    await producer.PublishAsync(
+        message,
+        SamplePigeonRoutes.CallbackRequestTopic,
+        SemanticVersion.Default,
+        cancellationToken);
+    return Results.Accepted(
+        "/pigeon/callbacks",
+        new
+        {
+            message.OrderId,
+            requestTopic = SamplePigeonRoutes.CallbackRequestTopic,
+            replyTopic = SamplePigeonRoutes.CallbackReplyTopic
+        });
+});
+
+app.MapGet("/pigeon/callbacks", (SamplePigeonCallbackStore callbacks)
+    => Results.Ok(new
+    {
+        executions = callbacks.ListExecutions(),
+        replies = callbacks.ListReplies()
+    }));
+
 app.MapGet("/pigeon/decisions", (SamplePigeonDecisionStore decisions)
     => Results.Ok(decisions.List()));
 
@@ -515,6 +575,16 @@ public static class SamplePigeonRoutes
     /// Gets the deferred sample topic.
     /// </summary>
     public const string DeferredTopic = "sample.orders.deferred";
+
+    /// <summary>
+    /// Gets the inbox-protected callback request topic.
+    /// </summary>
+    public const string CallbackRequestTopic = "sample.orders.callback.requests";
+
+    /// <summary>
+    /// Gets the durable callback reply topic.
+    /// </summary>
+    public const string CallbackReplyTopic = "sample.orders.callback.replies";
 }
 
 /// <summary>
@@ -578,6 +648,7 @@ public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
         builder
             .ForTopic(SamplePigeonRoutes.DeferredTopic)
             .UseCorePolicy("pigeon-deferred");
+        builder.ForTopic(SamplePigeonRoutes.CallbackRequestTopic);
     }
 }
 
@@ -656,6 +727,44 @@ public sealed record SamplePigeonDecisionSnapshot(
     string? AttemptId,
     string? TraceId,
     DateTimeOffset ObservedOnUtc);
+
+/// <summary>
+/// Stores callback executions and replies produced by the Pigeon outbox sample.
+/// </summary>
+public sealed class SamplePigeonCallbackStore
+{
+    private readonly ConcurrentDictionary<string, int> _executions =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentQueue<OrderCallbackReply> _replies = new();
+
+    /// <summary>
+    /// Records an inbox-protected callback request execution.
+    /// </summary>
+    /// <param name="orderId">The business order id.</param>
+    public void RecordExecution(string orderId)
+        => _executions.AddOrUpdate(orderId, 1, (_, current) => current + 1);
+
+    /// <summary>
+    /// Records a callback delivered through SquirrelBox Outbox and Mule.
+    /// </summary>
+    /// <param name="reply">The delivered callback.</param>
+    public void RecordReply(OrderCallbackReply reply)
+        => _replies.Enqueue(reply);
+
+    /// <summary>
+    /// Lists request execution counts by order id.
+    /// </summary>
+    /// <returns>The current execution counters.</returns>
+    public IReadOnlyDictionary<string, int> ListExecutions()
+        => new Dictionary<string, int>(_executions, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Lists callbacks delivered to the sample client.
+    /// </summary>
+    /// <returns>The delivered callback snapshots.</returns>
+    public IReadOnlyCollection<OrderCallbackReply> ListReplies()
+        => _replies.ToArray();
+}
 
 /// <summary>
 /// In-memory order store used by the sample application.
@@ -867,6 +976,25 @@ public sealed record LegacyCorrelationResponse(
 /// <param name="CustomerId">The customer id.</param>
 /// <param name="Amount">The order amount.</param>
 public sealed record OrderMessage(string OrderId, string CustomerId, decimal Amount);
+
+/// <summary>
+/// Request used to demonstrate inbox-protected processing followed by a durable callback.
+/// </summary>
+/// <param name="OrderId">The business order id.</param>
+/// <param name="CustomerId">The customer id.</param>
+/// <param name="Amount">The order amount.</param>
+public sealed record OrderCallbackRequest(string OrderId, string CustomerId, decimal Amount);
+
+/// <summary>
+/// Reply published through SquirrelBox Outbox after a callback request succeeds.
+/// </summary>
+/// <param name="OrderId">The business order id.</param>
+/// <param name="Status">The callback result.</param>
+/// <param name="CompletedOnUtc">The callback completion timestamp.</param>
+public sealed record OrderCallbackReply(
+    string OrderId,
+    string Status,
+    DateTimeOffset CompletedOnUtc);
 
 /// <summary>
 /// Sample outbox audit message.
