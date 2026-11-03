@@ -1,10 +1,32 @@
 using System.Diagnostics;
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using SquirrelBox.InMemory;
 
 namespace SquirrelBox.Tests;
 
 public sealed class PublicModelCoverageTests
 {
+    [Fact]
+    public void Public_contexts_and_not_found_exception_expose_constructor_values()
+    {
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSquirrelBox().UseInMemory();
+        using var services = serviceCollection.BuildServiceProvider();
+        var entryId = Ulid.NewUlid();
+        var exception = new InboxEntryNotFoundException(entryId);
+        var previous = new OutboxContext(new OutboxEnvelope());
+        var envelope = new OutboxEnvelope();
+        var outbox = new OutboxContext(envelope, previous);
+        var inbox = services.GetRequiredService<IInboxService>();
+        var operation = new SquirrelBoxOperationContext(services, inbox, inboxContext: null);
+
+        Assert.Equal(entryId, exception.EntryId);
+        Assert.Same(envelope, outbox.Envelope);
+        Assert.Same(previous, outbox.Previous);
+        Assert.Same(inbox, operation.Inbox);
+    }
+
     [Fact]
     public void Outbox_profile_context_short_constructor_uses_default_payload_type_resolver()
     {
