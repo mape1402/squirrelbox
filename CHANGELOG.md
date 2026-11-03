@@ -4,6 +4,20 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.2.1] - 2026-11-03
+
+### Added
+
+- Added end-to-end coverage proving Pigeon callbacks are persisted through SquirrelBox Outbox and Mule before the originating inbox entry completes.
+- Added retry coverage proving a transient callback publication failure is retried by Mule without re-executing the inbox consumer or creating another outbox envelope.
+- Added a runnable Pigeon callback sample that demonstrates inbox protection, durable replies, duplicate acknowledgement, and callback diagnostics.
+
+### Changed
+
+- Updated `SquirrelBox.Messaging.Pigeon` and its sample/test integrations to Pigeon 4.2.0.
+- Documented durable callback ordering, failure ownership, duplicate behavior, and the Pigeon pre-deserialization boundary.
+- Extended focused dashboard and public-model tests to preserve 100% line and branch coverage.
+
 ## [v4.2.0] - 2026-10-25
 
 ### Added
