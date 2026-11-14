@@ -4,6 +4,14 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.2.2] - 2026-11-13
+
+### Fixed
+
+- Fixed EF Core inbox duplicate detection so previously registered operations are resolved before attempting another insert, preventing expected duplicate requests from producing unique-index database errors.
+- Preserved atomic deduplication for truly concurrent first deliveries by retaining the unique business-key index as a race-condition fallback.
+- Added SQL Server integration coverage proving completed duplicates produce no EF Core error logs, unrelated primary-key violations still propagate, and concurrent reservations execute only once.
+
 ## [v4.2.1] - 2026-11-03
 
 ### Added

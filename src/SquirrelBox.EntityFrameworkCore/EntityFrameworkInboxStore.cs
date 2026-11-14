@@ -37,6 +37,10 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         ArgumentNullException.ThrowIfNull(entry);
 
         using var dbContext = _dbContextFactory.CreateDbContext();
+        var existing = await FindByBusinessKeyAsync(dbContext, entry, cancellationToken);
+        if (existing is not null)
+            return await ResolveExistingAsync(dbContext, existing, entry, cancellationToken);
+
         var record = ToRecord(entry);
         SquirrelBoxInboxAttemptRecord attemptRecord = null;
         dbContext.Set<SquirrelBoxInboxEntryRecord>().Add(record);
@@ -56,7 +60,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         catch (DbUpdateException)
         {
             using var duplicateContext = _dbContextFactory.CreateDbContext();
-            var existing = await FindByBusinessKeyForUpdateAsync(
+            existing = await FindByBusinessKeyAsync(
                 duplicateContext,
                 entry,
                 cancellationToken);
@@ -64,10 +68,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
             if (existing is null)
                 throw;
 
-            if (existing.Id == entry.Id)
-                return RecoverCommittedOpen(existing, entry);
-
-            return await ResolveDuplicateAsync(duplicateContext, existing, entry, cancellationToken);
+            return await ResolveExistingAsync(duplicateContext, existing, entry, cancellationToken);
         }
     }
 
@@ -190,7 +191,7 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
         return result.Select(ToEntry).ToArray();
     }
 
-    private static async Task<SquirrelBoxInboxEntryRecord> FindByBusinessKeyForUpdateAsync(
+    private static async Task<SquirrelBoxInboxEntryRecord> FindByBusinessKeyAsync(
         TDbContext dbContext,
         InboxEntry entry,
         CancellationToken cancellationToken)
@@ -216,6 +217,15 @@ public sealed class EntityFrameworkInboxStore<TDbContext> : IInboxStore, IInboxD
 
         return new InboxOpenResult(InboxOpenState.Opened, entry: entry);
     }
+
+    private static Task<InboxOpenResult> ResolveExistingAsync(
+        TDbContext dbContext,
+        SquirrelBoxInboxEntryRecord existing,
+        InboxEntry incoming,
+        CancellationToken cancellationToken)
+        => existing.Id == incoming.Id
+            ? Task.FromResult(RecoverCommittedOpen(existing, incoming))
+            : ResolveDuplicateAsync(dbContext, existing, incoming, cancellationToken);
 
     private static async Task<SquirrelBoxInboxEntryRecord> FindByIdAsync(
         TDbContext dbContext,

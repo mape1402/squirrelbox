@@ -1,8 +1,12 @@
+using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Transactions;
 using System.Threading;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using SquirrelBox.EntityFrameworkCore;
 
 namespace SquirrelBox.EntityFrameworkCore.Tests;
@@ -35,6 +39,41 @@ public sealed class EntityFrameworkInboxStoreE2ETests
             .Where(attempt => attempt.InboxEntryId == opened.Entry.Id)
             .ToArrayAsync();
         Assert.Single(attempts);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_resolves_completed_duplicate_without_logging_a_database_error()
+    {
+        var errors = new ConcurrentQueue<string>();
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(
+            connectionString,
+            configureDbContext: options => options.LogTo(errors.Enqueue, LogLevel.Error));
+        await EnsureDatabaseAsync(provider);
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var inbox = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+            await inbox.OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                "completed-duplicate",
+                new TestPayload("completed-duplicate")));
+            await inbox.CompleteCurrentAsync();
+        }
+
+        errors.Clear();
+        using var duplicateScope = provider.CreateScope();
+        var duplicate = await duplicateScope.ServiceProvider
+            .GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /orders",
+                "completed-duplicate",
+                new TestPayload("completed-duplicate")));
+
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.State);
+        Assert.Empty(errors);
     }
 
     [Fact]
@@ -115,6 +154,25 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         var entry = await inbox.GetAsync(accepted.Entry.Id);
 
         Assert.Equal(InboxStatus.Completed, entry.Status);
+    }
+
+    [Fact]
+    public async Task SqlServer_store_resolves_the_unique_index_race_when_initial_lookups_are_concurrent()
+    {
+        var lookupBarrier = new InboxLookupBarrierInterceptor();
+        var connectionString = CreateIsolatedConnectionString();
+        var provider = CreateProvider(
+            connectionString,
+            configureDbContext: options => options.AddInterceptors(lookupBarrier));
+        await EnsureDatabaseAsync(provider);
+
+        var first = OpenConcurrentEntryAsync(provider);
+        var second = OpenConcurrentEntryAsync(provider);
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Single(results, result => result.State == InboxOpenState.Opened);
+        Assert.Single(results, result => result.State == InboxOpenState.DuplicateInProgress);
+        Assert.Equal(results[0].Entry.Id, results[1].Entry.Id);
     }
 
     [Fact]
@@ -569,16 +627,34 @@ public sealed class EntityFrameworkInboxStoreE2ETests
         return await task;
     }
 
+    private static Task<InboxOpenResult> OpenConcurrentEntryAsync(ServiceProvider provider)
+        => RunWithoutAmbientContextAsync(async () =>
+        {
+            using var scope = provider.CreateScope();
+            return await scope.ServiceProvider
+                .GetRequiredService<IInboxService>()
+                .OpenOrContinueAsync(InboxOpenRequest.For(
+                    "http",
+                    "POST /concurrent-orders",
+                    "concurrent-order",
+                    new TestPayload("concurrent-order")));
+        });
+
     private static ServiceProvider CreateProvider(
         string connectionString,
         TimeProvider timeProvider = null,
-        Action<SquirrelBoxOptions> configure = null)
+        Action<SquirrelBoxOptions> configure = null,
+        Action<DbContextOptionsBuilder> configureDbContext = null)
     {
         var services = new ServiceCollection();
         if (timeProvider is not null)
             services.AddSingleton(timeProvider);
 
-        services.AddDbContext<TestInboxDbContext>(options => options.UseSqlServer(connectionString));
+        services.AddDbContext<TestInboxDbContext>(options =>
+        {
+            options.UseSqlServer(connectionString);
+            configureDbContext?.Invoke(options);
+        });
         services
             .AddSquirrelBox(configure)
             .UseEntityFrameworkInbox<TestInboxDbContext>();
@@ -607,6 +683,31 @@ public sealed class EntityFrameworkInboxStoreE2ETests
     }
 
     private sealed record TestPayload(string Id);
+
+    private sealed class InboxLookupBarrierInterceptor : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _lookupsReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _lookupCount;
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains("FROM [SquirrelBoxInboxEntries]", StringComparison.Ordinal) ||
+                !command.CommandText.Contains("WHERE", StringComparison.Ordinal))
+            {
+                return result;
+            }
+
+            if (Interlocked.Increment(ref _lookupCount) == 2)
+                _lookupsReady.TrySetResult();
+
+            await _lookupsReady.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            return result;
+        }
+    }
 
     private sealed class ManualTimeProvider : TimeProvider
     {
