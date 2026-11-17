@@ -1,6 +1,8 @@
 namespace SquirrelBox.AspNetCore;
 
-internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetadata
+internal sealed class SquirrelBoxInboxEndpointMetadata :
+    ISquirrelBoxInboxMetadata,
+    ISquirrelBoxInboxIdentityMetadata
 {
     public SquirrelBoxInboxEndpointMetadata(SquirrelBoxInboxEndpointOptions options)
     {
@@ -10,6 +12,8 @@ internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetada
         PolicyName = options.PolicyName;
         EntryLifetime = options.EntryLifetime;
         CompletedLock = options.CompletedLock;
+        IdempotencyKeyResolutionMode = options.IdempotencyKeyResolutionMode;
+        CorrelationIdInputMode = options.CorrelationIdInputMode;
         CorrelationIdResolutionMode = options.CorrelationIdResolutionMode;
         ExecutionMode = options.ExecutionMode;
         Deferred = CloneDeferred(options.Deferred);
@@ -22,6 +26,10 @@ internal sealed class SquirrelBoxInboxEndpointMetadata : ISquirrelBoxInboxMetada
     public TimeSpan? EntryLifetime { get; }
 
     public InboxCompletedLockMode CompletedLock { get; }
+
+    public InboxIdempotencyKeyResolutionMode IdempotencyKeyResolutionMode { get; }
+
+    public InboxCorrelationIdInputMode CorrelationIdInputMode { get; }
 
     public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; }
 

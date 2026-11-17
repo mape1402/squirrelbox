@@ -4,6 +4,21 @@ All notable changes to SquirrelBox will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v4.3.0] - 2026-11-17
+
+### Added
+
+- Added configurable inbox identity input modes so an operation can ignore an incoming idempotency key and recompute its effective key from the configured payload fingerprint.
+- Added independent correlation input handling so an operation can ignore an incoming correlation id and resolve or generate the effective value through the existing strategies and factory.
+- Added global defaults, named core-policy overrides, MVC attribute and Minimal API options, and Messaging profile APIs with deterministic operation-to-global precedence.
+- Added HTTP, transport-neutral Messaging, and Pigeon end-to-end coverage proving different incoming identities converge on the same effective identity for an equivalent payload.
+- Added runnable HTTP and Pigeon sample scenarios for canonical payload-based identity.
+
+### Changed
+
+- Preserved the existing trust-incoming behavior by default while returning only the effective computed or resolved identity through HTTP headers and structured Messaging metadata.
+- Documented canonical identity configuration, payload requirements, fingerprint profiles, correlation resolution interaction, and Pigeon usage.
+
 ## [v4.2.2] - 2026-11-13
 
 ### Fixed

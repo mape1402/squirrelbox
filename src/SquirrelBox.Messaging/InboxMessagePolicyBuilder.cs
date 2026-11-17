@@ -101,6 +101,28 @@ public sealed class InboxMessagePolicyBuilder
     }
 
     /// <summary>
+    /// Sets how the effective idempotency key is selected for messages matched by this policy.
+    /// </summary>
+    /// <param name="mode">The idempotency key resolution mode.</param>
+    /// <returns>The same builder for chaining.</returns>
+    public InboxMessagePolicyBuilder WithIdempotencyKeyResolution(InboxIdempotencyKeyResolutionMode mode)
+    {
+        _policy.IdempotencyKeyResolutionMode = mode;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets whether messages matched by this policy accept an incoming correlation id.
+    /// </summary>
+    /// <param name="mode">The incoming correlation id behavior.</param>
+    /// <returns>The same builder for chaining.</returns>
+    public InboxMessagePolicyBuilder WithCorrelationIdInput(InboxCorrelationIdInputMode mode)
+    {
+        _policy.CorrelationIdInputMode = mode;
+        return this;
+    }
+
+    /// <summary>
     /// Sets how correlation ids are resolved for messages matched by this policy.
     /// </summary>
     /// <param name="mode">The correlation id resolution mode.</param>

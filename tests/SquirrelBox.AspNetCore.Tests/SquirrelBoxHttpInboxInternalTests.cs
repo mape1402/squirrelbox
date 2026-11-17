@@ -83,6 +83,8 @@ public sealed class SquirrelBoxHttpInboxInternalTests
             TtlSeconds = 5,
             DeferExecution = true,
             CompletedLock = InboxCompletedLockMode.Forever,
+            IdempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+            CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming,
             DeferredLane = "orders",
             RetryMaxAttempts = 3
         };
@@ -109,6 +111,10 @@ public sealed class SquirrelBoxHttpInboxInternalTests
         Assert.Equal(TimeSpan.FromSeconds(5), request.EntryLifetime);
         Assert.Equal(InboxExecutionMode.Deferred, request.ExecutionMode);
         Assert.Equal(InboxCompletedLockMode.Forever, request.CompletedLock);
+        Assert.Equal(
+            InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+            request.IdempotencyKeyResolutionMode);
+        Assert.Equal(InboxCorrelationIdInputMode.IgnoreIncoming, request.CorrelationIdInputMode);
         Assert.Equal("orders", request.Deferred.Lane);
         Assert.Equal(3, request.Deferred.MaxAttempts);
     }
@@ -152,6 +158,8 @@ public sealed class SquirrelBoxHttpInboxInternalTests
         Assert.Equal(SquirrelBoxMetadataNames.AttemptId, request.AttemptIdName);
         Assert.Equal(InboxExecutionMode.Deferred, request.ExecutionMode);
         Assert.Equal(InboxCompletedLockMode.Default, request.CompletedLock);
+        Assert.Equal(InboxIdempotencyKeyResolutionMode.Default, request.IdempotencyKeyResolutionMode);
+        Assert.Equal(InboxCorrelationIdInputMode.Default, request.CorrelationIdInputMode);
     }
 
     [Fact]
@@ -754,11 +762,22 @@ public sealed class SquirrelBoxHttpInboxInternalTests
         var metadataType = typeof(SquirrelBoxAspNetCoreOptions).Assembly.GetType(
             "SquirrelBox.AspNetCore.SquirrelBoxInboxEndpointMetadata",
             throwOnError: true)!;
-        var configured = new SquirrelBoxInboxEndpointOptions { ArgumentName = " " };
+        var configured = new SquirrelBoxInboxEndpointOptions
+        {
+            ArgumentName = " ",
+            IdempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+            CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming
+        };
         configured.Deferred.Lane = "lane";
         var instance = Activator.CreateInstance(metadataType, configured)!;
 
         Assert.Equal("request", metadataType.GetProperty("ArgumentName")!.GetValue(instance));
+        Assert.Equal(
+            InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+            metadataType.GetProperty("IdempotencyKeyResolutionMode")!.GetValue(instance));
+        Assert.Equal(
+            InboxCorrelationIdInputMode.IgnoreIncoming,
+            metadataType.GetProperty("CorrelationIdInputMode")!.GetValue(instance));
         var deferred = Assert.IsType<InboxDeferredPolicyOptions>(metadataType.GetProperty("Deferred")!.GetValue(instance));
         Assert.Equal("lane", deferred.Lane);
         Assert.Throws<TargetInvocationException>(() => Activator.CreateInstance(metadataType, new object[] { null }));

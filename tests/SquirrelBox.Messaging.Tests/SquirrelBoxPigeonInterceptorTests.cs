@@ -57,6 +57,49 @@ public sealed class SquirrelBoxPigeonInterceptorTests
     }
 
     [Fact]
+    public async Task DecisionInterceptor_applies_canonical_identity_policy_to_deserialized_payload()
+    {
+        using var provider = CreateProvider();
+        SquirrelBoxMetadata firstMetadata;
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var first = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(firstScope.ServiceProvider);
+            var firstContext = CreateContext(
+                firstScope.ServiceProvider,
+                topic: "canonical-pigeon",
+                rawMetadata: CreateRawMetadata("incoming-key-one"),
+                correlationId: "incoming-correlation-one");
+
+            var firstDecision = await first.InterceptAsync(firstContext);
+            var inbox = firstScope.ServiceProvider.GetRequiredService<IInboxService>();
+
+            Assert.Equal(PigeonConsumeDecision.Continue, firstDecision.Decision);
+            firstMetadata = ReadSquirrelBoxMetadata(firstContext.ReplyMetadata);
+            Assert.NotEqual("incoming-key-one", firstMetadata.IdempotencyKey);
+            Assert.NotEqual("incoming-correlation-one", firstMetadata.CorrelationId);
+            await inbox.CompleteCurrentAsync();
+        }
+
+        using var secondScope = provider.CreateScope();
+        var second = ActivatorUtilities.CreateInstance<SquirrelBoxPigeonDecisionInterceptor>(secondScope.ServiceProvider);
+        var secondContext = CreateContext(
+            secondScope.ServiceProvider,
+            topic: "canonical-pigeon",
+            rawMetadata: CreateRawMetadata("incoming-key-two"),
+            correlationId: "incoming-correlation-two");
+
+        var secondDecision = await second.InterceptAsync(secondContext);
+        var secondMetadata = ReadSquirrelBoxMetadata(secondDecision.Metadata);
+
+        Assert.Equal(PigeonConsumeDecision.AckAndSkip, secondDecision.Decision);
+        Assert.Equal(PigeonConsumeOutcomeKind.AlreadyProcessed, secondDecision.Outcome.Kind);
+        Assert.Equal(firstMetadata.IdempotencyKey, secondMetadata.IdempotencyKey);
+        Assert.Equal(firstMetadata.CorrelationId, secondMetadata.CorrelationId);
+        Assert.NotEqual(firstMetadata.TraceId, secondMetadata.TraceId);
+    }
+
+    [Fact]
     public async Task DecisionInterceptor_rejects_when_message_has_no_idempotency_material()
     {
         using var provider = CreateProvider();
@@ -658,11 +701,12 @@ public sealed class SquirrelBoxPigeonInterceptorTests
         bool useDefaultMessage = true,
         string messageId = null,
         string correlationId = null,
-        bool useNullRawMetadata = false)
+        bool useNullRawMetadata = false,
+        string topic = "orders")
         => new()
         {
             Services = services,
-            Topic = "orders",
+            Topic = topic,
             Subscription = "billing",
             MessageVersion = version ?? SemanticVersion.Parse("1.2.0"),
             Message = useDefaultMessage ? message ?? new OrderMessage("order-1") : message,
@@ -807,5 +851,10 @@ public sealed class SquirrelBoxPigeonInterceptorTests
 public sealed class SquirrelBoxPigeonTestPolicyProfile : InboxMessagePolicyProfile
 {
     public override void Configure(InboxMessagePolicyProfileBuilder builder)
-        => builder.ForTopic("orders");
+    {
+        builder.ForTopic("orders");
+        builder.ForTopic("canonical-pigeon")
+            .WithIdempotencyKeyResolution(InboxIdempotencyKeyResolutionMode.RecomputeFromPayload)
+            .WithCorrelationIdInput(InboxCorrelationIdInputMode.IgnoreIncoming);
+    }
 }

@@ -70,6 +70,7 @@ internal static class SquirrelBoxHttpInbox
         var idempotencyKey = ResolveRequestHeader(httpContext, options.RequestHeaderNames);
         var correlationId = ResolveRequestHeader(httpContext, options.CorrelationIdHeaderNames);
         var traceId = ResolveRequestHeader(httpContext, options.TraceIdHeaderNames);
+        var identityMetadata = inboxMetadata as ISquirrelBoxInboxIdentityMetadata;
 
         return new InboxOpenRequest
         {
@@ -77,10 +78,14 @@ internal static class SquirrelBoxHttpInbox
             Operation = operation ?? options.OperationResolver(httpContext),
             IdempotencyKey = idempotencyKey.Value,
             IdempotencyKeyName = idempotencyKey.Name,
+            IdempotencyKeyResolutionMode = identityMetadata?.IdempotencyKeyResolutionMode ??
+                                           InboxIdempotencyKeyResolutionMode.Default,
             Payload = payload,
             PayloadType = payload?.GetType().AssemblyQualifiedName,
             CorrelationId = correlationId.Value,
             CorrelationIdName = correlationId.Name,
+            CorrelationIdInputMode = identityMetadata?.CorrelationIdInputMode ??
+                                     InboxCorrelationIdInputMode.Default,
             CorrelationIdResolutionMode = inboxMetadata?.CorrelationIdResolutionMode ??
                                           CorrelationIdResolutionMode.Default,
             TraceId = string.IsNullOrWhiteSpace(traceId.Value) ? httpContext.TraceIdentifier : traceId.Value,

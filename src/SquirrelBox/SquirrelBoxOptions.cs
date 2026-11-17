@@ -23,6 +23,18 @@ public sealed class SquirrelBoxOptions
     public bool AllowPayloadHashAsIdempotencyKey { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the default idempotency key resolution mode.
+    /// </summary>
+    public InboxIdempotencyKeyResolutionMode DefaultIdempotencyKeyResolutionMode { get; set; } =
+        InboxIdempotencyKeyResolutionMode.PreferIncoming;
+
+    /// <summary>
+    /// Gets or sets the default behavior for incoming correlation ids.
+    /// </summary>
+    public InboxCorrelationIdInputMode DefaultCorrelationIdInputMode { get; set; } =
+        InboxCorrelationIdInputMode.PreferIncoming;
+
+    /// <summary>
     /// Gets or sets the default correlation id resolution mode.
     /// </summary>
     public CorrelationIdResolutionMode DefaultCorrelationIdResolutionMode { get; set; } =

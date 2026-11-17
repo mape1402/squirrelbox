@@ -26,6 +26,16 @@ public sealed class SquirrelBoxInboxEndpointOptions
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
 
     /// <summary>
+    /// Gets or sets how the effective idempotency key is selected by this entrypoint.
+    /// </summary>
+    public InboxIdempotencyKeyResolutionMode IdempotencyKeyResolutionMode { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this entrypoint accepts an incoming correlation id.
+    /// </summary>
+    public InboxCorrelationIdInputMode CorrelationIdInputMode { get; set; }
+
+    /// <summary>
     /// Gets or sets the correlation id resolution mode selected by this entrypoint.
     /// </summary>
     public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }

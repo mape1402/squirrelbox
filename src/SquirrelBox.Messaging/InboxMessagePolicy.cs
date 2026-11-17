@@ -51,6 +51,16 @@ public sealed class InboxMessagePolicy
     public InboxExecutionMode? ExecutionMode { get; set; }
 
     /// <summary>
+    /// Gets or sets how the effective idempotency key is selected by this policy.
+    /// </summary>
+    public InboxIdempotencyKeyResolutionMode IdempotencyKeyResolutionMode { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this policy accepts an incoming correlation id.
+    /// </summary>
+    public InboxCorrelationIdInputMode CorrelationIdInputMode { get; set; }
+
+    /// <summary>
     /// Gets or sets the correlation id resolution mode selected by this policy.
     /// </summary>
     public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
