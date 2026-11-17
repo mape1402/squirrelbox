@@ -149,6 +149,56 @@ public sealed class InboxMessageServiceE2ETests
     }
 
     [Fact]
+    public async Task OpenAsync_can_recompute_identity_and_propagate_effective_metadata()
+    {
+        var provider = CreateProvider();
+        InboxMessageOpenResult opened;
+        var replyMetadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var firstScope = provider.CreateScope())
+        {
+            var service = firstScope.ServiceProvider.GetRequiredService<IInboxMessageService>();
+            opened = await service.OpenAsync(new InboxMessageContext
+            {
+                Transport = "rabbitmq",
+                Topic = "canonical-orders",
+                Version = "v1",
+                Subscription = "billing",
+                Operation = "created",
+                Payload = new OrderMessage("canonical-order"),
+                Metadata = CreateSquirrelBoxMetadata("ignored-key", "ignored-correlation")
+            });
+            service.AttachEffectiveKey(replyMetadata);
+            await firstScope.ServiceProvider.GetRequiredService<IInboxService>().CompleteCurrentAsync();
+        }
+
+        using var secondScope = provider.CreateScope();
+        var duplicate = await secondScope.ServiceProvider.GetRequiredService<IInboxMessageService>()
+            .OpenAsync(new InboxMessageContext
+            {
+                Transport = "rabbitmq",
+                Topic = "canonical-orders",
+                Version = "v1",
+                Subscription = "billing",
+                Operation = "created",
+                Payload = new OrderMessage("canonical-order"),
+                Metadata = CreateSquirrelBoxMetadata("another-key", "another-correlation")
+            });
+
+        var effectiveMetadata = ReadSquirrelBoxMetadata(replyMetadata);
+        Assert.NotEqual("ignored-key", opened.EffectiveIdempotencyKey);
+        Assert.Equal(opened.OpenResult.Entry.PayloadHash, opened.EffectiveIdempotencyKey);
+        Assert.Equal(InboxIdempotencyKeySource.ComputedFromPayload, opened.OpenResult.IdempotencyKeySource);
+        Assert.NotEqual("ignored-correlation", opened.EffectiveCorrelationId);
+        Assert.Equal(SquirrelBoxMetadataValueSource.Generated, opened.OpenResult.Entry.CorrelationIdSource);
+        Assert.Equal(opened.EffectiveIdempotencyKey, effectiveMetadata.IdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, effectiveMetadata.CorrelationId);
+        Assert.Equal(InboxOpenState.DuplicateCompleted, duplicate.OpenResult.State);
+        Assert.Equal(opened.EffectiveIdempotencyKey, duplicate.EffectiveIdempotencyKey);
+        Assert.Equal(opened.EffectiveCorrelationId, duplicate.EffectiveCorrelationId);
+    }
+
+    [Fact]
     public async Task OpenAsync_applies_deferred_settings_from_matching_message_policy()
     {
         var provider = CreateProvider();
@@ -538,6 +588,9 @@ public sealed class InboxMessageServiceTestPolicyProfile : InboxMessagePolicyPro
     public override void Configure(InboxMessagePolicyProfileBuilder builder)
     {
         builder.ForTopic("orders");
+        builder.ForTopic("canonical-orders")
+            .WithIdempotencyKeyResolution(InboxIdempotencyKeyResolutionMode.RecomputeFromPayload)
+            .WithCorrelationIdInput(InboxCorrelationIdInputMode.IgnoreIncoming);
         builder.Match(topic: "deferred-orders", version: "v1", subscription: "workers", operation: "created")
             .DeferExecution()
             .WithDeferred(options =>

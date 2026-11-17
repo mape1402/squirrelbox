@@ -80,15 +80,20 @@ public sealed class DefaultInbox : IInboxService
             : new Dictionary<string, string>(request.Metadata, StringComparer.OrdinalIgnoreCase);
         var policy = ResolvePolicy(request.PolicyName);
         var payloadHash = request.Payload is null ? null : _payloadHasher.ComputeHash(request.Payload);
-        var idempotencyKey = request.IdempotencyKey;
+        var idempotencyKeyResolutionMode = ResolveIdempotencyKeyResolutionMode(request, policy);
+        var idempotencyKey = idempotencyKeyResolutionMode is InboxIdempotencyKeyResolutionMode.RecomputeFromPayload
+            ? null
+            : request.IdempotencyKey;
         var idempotencyKeyName = ResolveName(request.IdempotencyKeyName, SquirrelBoxMetadataNames.IdempotencyKey);
         var keySource = InboxIdempotencyKeySource.Explicit;
 
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            var allowPayloadFallback = request.AllowPayloadHashAsIdempotencyKey ??
-                                       policy.AllowPayloadHashAsIdempotencyKey ??
-                                       _options.AllowPayloadHashAsIdempotencyKey;
+            var allowPayloadFallback =
+                idempotencyKeyResolutionMode is InboxIdempotencyKeyResolutionMode.RecomputeFromPayload ||
+                (request.AllowPayloadHashAsIdempotencyKey ??
+                 policy.AllowPayloadHashAsIdempotencyKey ??
+                 _options.AllowPayloadHashAsIdempotencyKey);
             if (!allowPayloadFallback || string.IsNullOrWhiteSpace(payloadHash))
             {
                 _logger.LogWarning(
@@ -111,7 +116,9 @@ public sealed class DefaultInbox : IInboxService
             Operation = request.Operation,
             IdempotencyKey = idempotencyKey,
             IdempotencyKeySource = keySource,
-            IncomingCorrelationId = request.CorrelationId,
+            IncomingCorrelationId = ResolveCorrelationIdInputMode(request, policy) is InboxCorrelationIdInputMode.IgnoreIncoming
+                ? null
+                : request.CorrelationId,
             IncomingTraceId = request.TraceId,
             Payload = request.Payload,
             Metadata = requestMetadata
@@ -424,6 +431,41 @@ public sealed class DefaultInbox : IInboxService
         return _options.DefaultCorrelationIdResolutionMode is CorrelationIdResolutionMode.Default
             ? CorrelationIdResolutionMode.FactoryOnly
             : _options.DefaultCorrelationIdResolutionMode;
+    }
+
+    private InboxIdempotencyKeyResolutionMode ResolveIdempotencyKeyResolutionMode(
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        var mode = request.IdempotencyKeyResolutionMode is not InboxIdempotencyKeyResolutionMode.Default
+            ? request.IdempotencyKeyResolutionMode
+            : policy.IdempotencyKeyResolutionMode is not InboxIdempotencyKeyResolutionMode.Default
+                ? policy.IdempotencyKeyResolutionMode
+                : _options.DefaultIdempotencyKeyResolutionMode is InboxIdempotencyKeyResolutionMode.Default
+                    ? InboxIdempotencyKeyResolutionMode.PreferIncoming
+                    : _options.DefaultIdempotencyKeyResolutionMode;
+
+        return mode is InboxIdempotencyKeyResolutionMode.PreferIncoming or
+            InboxIdempotencyKeyResolutionMode.RecomputeFromPayload
+            ? mode
+            : throw new ArgumentOutOfRangeException(nameof(mode), mode, "A concrete idempotency key resolution mode is required.");
+    }
+
+    private InboxCorrelationIdInputMode ResolveCorrelationIdInputMode(
+        InboxOpenRequest request,
+        InboxIdempotencyPolicy policy)
+    {
+        var mode = request.CorrelationIdInputMode is not InboxCorrelationIdInputMode.Default
+            ? request.CorrelationIdInputMode
+            : policy.CorrelationIdInputMode is not InboxCorrelationIdInputMode.Default
+                ? policy.CorrelationIdInputMode
+                : _options.DefaultCorrelationIdInputMode is InboxCorrelationIdInputMode.Default
+                    ? InboxCorrelationIdInputMode.PreferIncoming
+                    : _options.DefaultCorrelationIdInputMode;
+
+        return mode is InboxCorrelationIdInputMode.PreferIncoming or InboxCorrelationIdInputMode.IgnoreIncoming
+            ? mode
+            : throw new ArgumentOutOfRangeException(nameof(mode), mode, "A concrete correlation id input mode is required.");
     }
 
     private DateTimeOffset? ResolveExpiration(

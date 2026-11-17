@@ -3,7 +3,7 @@
 [![Build](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![NuGet](https://img.shields.io/nuget/v/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
 [![Downloads](https://img.shields.io/nuget/dt/SquirrelBox.svg)](https://www.nuget.org/packages/SquirrelBox)
-[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmape1402%2Fsquirrelbox%2Fmain%2Fassets%2Fcoverage-badge.json%3Fv%3D4.2.0&cacheSeconds=60)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmape1402%2Fsquirrelbox%2Fmain%2Fassets%2Fcoverage-badge.json%3Fv%3D4.3.0&cacheSeconds=60)](https://github.com/mape1402/squirrelbox/actions/workflows/build-and-release.yml)
 [![License](https://img.shields.io/github/license/mape1402/squirrelbox.svg)](LICENSE)
 
 ![SquirrelBox README hero](https://raw.githubusercontent.com/mape1402/squirrelbox/main/assets/readme-hero.png)
@@ -28,11 +28,11 @@ dotnet add package SquirrelBox.Mule
 Package reference example:
 
 ```xml
-<PackageReference Include="SquirrelBox" Version="4.2.0" />
-<PackageReference Include="SquirrelBox.AspNetCore" Version="4.2.0" />
-<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="4.2.0" />
-<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="4.2.0" />
-<PackageReference Include="SquirrelBox.Mule" Version="4.2.0" />
+<PackageReference Include="SquirrelBox" Version="4.3.0" />
+<PackageReference Include="SquirrelBox.AspNetCore" Version="4.3.0" />
+<PackageReference Include="SquirrelBox.AspNetCore.Dashboard" Version="4.3.0" />
+<PackageReference Include="SquirrelBox.EntityFrameworkCore" Version="4.3.0" />
+<PackageReference Include="SquirrelBox.Mule" Version="4.3.0" />
 ```
 
 ## Getting Started
@@ -431,6 +431,37 @@ When the request uses a configured alternate header such as `X-Idempotency-Key` 
 `X-Correlation-Id`, SquirrelBox propagates the same header name back. Computed keys use the
 configured default response/request header name.
 
+Entrypoints trust incoming idempotency and correlation values by default. An endpoint that owns
+its canonical identity can ignore those values, recompute the key with its payload fingerprint,
+and resolve or generate correlation locally:
+
+```csharp
+[HttpPost("canonical-orders")]
+[SquirrelBoxInbox(
+    IdempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+    CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming)]
+public IActionResult CreateCanonicalOrder(CreateOrderRequest request) => Ok();
+```
+
+`RecomputeFromPayload` uses the configured `InboxFingerprintProfile` and requires a bound payload.
+It deliberately ignores an incoming key even when payload-hash fallback is otherwise disabled.
+`IgnoreIncoming` only controls the correlation input: the configured
+`CorrelationIdResolutionMode` still decides whether strategies must resolve a value or the factory
+may generate one. Responses contain the effective computed/resolved values, never the ignored ones.
+
+The same behavior can be selected globally when every unconfigured operation should own its
+canonical identity. Operation and named-policy settings take precedence over these defaults:
+
+```csharp
+services.AddSquirrelBox(options =>
+{
+    options.DefaultIdempotencyKeyResolutionMode =
+        InboxIdempotencyKeyResolutionMode.RecomputeFromPayload;
+    options.DefaultCorrelationIdInputMode =
+        InboxCorrelationIdInputMode.IgnoreIncoming;
+});
+```
+
 For MVC controllers, add `[SquirrelBoxInbox]` to the action that receives the bound DTO:
 
 ```csharp
@@ -533,6 +564,14 @@ app.MapPost("/legacy/b", HandleLegacyRequest)
        options.CorrelationIdResolutionMode =
            CorrelationIdResolutionMode.ResolveRequired);
 
+app.MapPost("/canonical-orders", HandleOrder)
+   .WithSquirrelBoxInbox(options =>
+   {
+       options.IdempotencyKeyResolutionMode =
+           InboxIdempotencyKeyResolutionMode.RecomputeFromPayload;
+       options.CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming;
+   });
+
 app.MapPost("/orders/deferred", HandleDeferredOrder)
    .WithSquirrelBoxInbox(options =>
    {
@@ -633,6 +672,13 @@ public sealed class OrdersMessageInboxProfile : InboxMessagePolicyProfile
             .WithCompletedLock(InboxCompletedLockMode.Forever);
 
         builder
+            .ForTopic("canonical.orders")
+            .WithIdempotencyKeyResolution(
+                InboxIdempotencyKeyResolutionMode.RecomputeFromPayload)
+            .WithCorrelationIdInput(
+                InboxCorrelationIdInputMode.IgnoreIncoming);
+
+        builder
             .Match(
                 topic: "legacy.related",
                 version: "1.0.0",
@@ -643,6 +689,11 @@ public sealed class OrdersMessageInboxProfile : InboxMessagePolicyProfile
     }
 }
 ```
+
+Messaging applies these modes after reading the structured `SquirrelBoxMetadata` section. The
+effective computed key and locally resolved correlation id are written back as one structured
+metadata section for replies and subsequent publishes. Pigeon requires no adapter-specific
+configuration beyond the normal SquirrelBox integration.
 
 Then open from the adapter or orchestration layer:
 

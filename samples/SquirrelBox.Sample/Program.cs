@@ -138,6 +138,17 @@ pigeon.AddConsumeHandler<OrderMessage>(
     });
 
 pigeon.AddConsumeHandler<OrderMessage>(
+    SamplePigeonRoutes.CanonicalIdentityTopic,
+    SemanticVersion.Default,
+    "canonical-identity",
+    (context, message) =>
+    {
+        context.Services.GetRequiredService<SampleOrderStore>()
+            .MarkMessage(message, "pigeon-canonical-identity");
+        return Task.CompletedTask;
+    });
+
+pigeon.AddConsumeHandler<OrderMessage>(
     SamplePigeonRoutes.DeferredTopic,
     SemanticVersion.Default,
     "deferred",
@@ -275,6 +286,23 @@ app.MapPost("/orders/computed-key", async (
 })
 .WithSquirrelBoxInbox();
 
+app.MapPost("/orders/canonical-identity", async (
+    CreateOrderRequest request,
+    ISquirrelBoxOperationService operations,
+    CancellationToken cancellationToken) =>
+{
+    var result = await operations.ExecuteAsync<CreateOrderOperation, CreateOrderRequest, OrderSnapshot>(
+        request,
+        cancellationToken);
+
+    return ToHttpResult(result);
+})
+.WithSquirrelBoxInbox(options =>
+{
+    options.IdempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.RecomputeFromPayload;
+    options.CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming;
+});
+
 app.MapPost("/orders/window", async (
     CreateOrderRequest request,
     ISquirrelBoxOperationService operations,
@@ -376,6 +404,21 @@ app.MapPost("/pigeon/inline", async (
 {
     await producer.PublishAsync(message, SamplePigeonRoutes.InlineTopic, SemanticVersion.Default, cancellationToken);
     return Results.Accepted($"/orders/{message.OrderId}", new { message.OrderId, topic = SamplePigeonRoutes.InlineTopic });
+});
+
+app.MapPost("/pigeon/canonical-identity", async (
+    OrderMessage message,
+    IProducer producer,
+    CancellationToken cancellationToken) =>
+{
+    await producer.PublishAsync(
+        message,
+        SamplePigeonRoutes.CanonicalIdentityTopic,
+        SemanticVersion.Default,
+        cancellationToken);
+    return Results.Accepted(
+        $"/orders/{message.OrderId}",
+        new { message.OrderId, topic = SamplePigeonRoutes.CanonicalIdentityTopic });
 });
 
 app.MapPost("/pigeon/deferred", async (
@@ -572,6 +615,11 @@ public static class SamplePigeonRoutes
     public const string InlineTopic = "sample.orders.inline";
 
     /// <summary>
+    /// Gets the sample topic that recomputes incoming message identity.
+    /// </summary>
+    public const string CanonicalIdentityTopic = "sample.orders.canonical-identity";
+
+    /// <summary>
     /// Gets the deferred sample topic.
     /// </summary>
     public const string DeferredTopic = "sample.orders.deferred";
@@ -645,6 +693,9 @@ public sealed class SamplePigeonInboxProfile : InboxMessagePolicyProfile
     public override void Configure(InboxMessagePolicyProfileBuilder builder)
     {
         builder.ForTopic(SamplePigeonRoutes.InlineTopic);
+        builder.ForTopic(SamplePigeonRoutes.CanonicalIdentityTopic)
+            .WithIdempotencyKeyResolution(InboxIdempotencyKeyResolutionMode.RecomputeFromPayload)
+            .WithCorrelationIdInput(InboxCorrelationIdInputMode.IgnoreIncoming);
         builder
             .ForTopic(SamplePigeonRoutes.DeferredTopic)
             .UseCorePolicy("pigeon-deferred");

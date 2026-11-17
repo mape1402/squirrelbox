@@ -83,6 +83,56 @@ public sealed class CorrelationIdInboxTests
     }
 
     [Fact]
+    public async Task Ignore_incoming_allows_a_required_strategy_to_resolve_correlation()
+    {
+        using var provider = CreateProvider(options =>
+            options.AddInboxPolicy("resolve-legacy", policy =>
+            {
+                policy.CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming;
+                policy.CorrelationIdResolutionMode = CorrelationIdResolutionMode.ResolveRequired;
+            }));
+        provider.GetRequiredService<LegacyCorrelationDatabase>().Store("123", "resolved-correlation");
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider.GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /legacy",
+                "legacy-key",
+                new LegacyRequest("123"),
+                correlationId: "ignored-correlation",
+                policyName: "resolve-legacy"));
+
+        Assert.Equal(InboxOpenState.Opened, result.State);
+        Assert.Equal("resolved-correlation", result.EffectiveCorrelationId);
+        Assert.Equal(SquirrelBoxMetadataValueSource.Resolved, result.Entry.CorrelationIdSource);
+    }
+
+    [Fact]
+    public async Task Ignore_incoming_rejects_when_required_strategies_cannot_resolve()
+    {
+        using var provider = CreateProvider(options =>
+            options.AddInboxPolicy("resolve-legacy", policy =>
+            {
+                policy.CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming;
+                policy.CorrelationIdResolutionMode = CorrelationIdResolutionMode.ResolveRequired;
+            }));
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider.GetRequiredService<IInboxService>()
+            .OpenOrContinueAsync(InboxOpenRequest.For(
+                "http",
+                "POST /legacy",
+                "legacy-key",
+                new LegacyRequest("missing"),
+                correlationId: "ignored-correlation",
+                policyName: "resolve-legacy"));
+
+        Assert.Equal(InboxOpenState.MissingCorrelationId, result.State);
+        Assert.Null(result.Entry);
+    }
+
+    [Fact]
     public async Task Request_override_wins_over_named_policy_and_global_mode()
     {
         using var provider = CreateProvider(options =>

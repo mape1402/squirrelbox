@@ -107,6 +107,58 @@ public sealed class SquirrelBoxInboxFilterE2ETests
     }
 
     [Fact]
+    public async Task Mvc_attribute_can_recompute_key_and_ignore_incoming_correlation()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/payload-orders/recomputed-identity");
+        request.Headers.Add("Idempotency-Key", "ignored-key");
+        request.Headers.Add("Correlation-Id", "ignored-correlation");
+        request.Content = JsonContent.Create(new PayloadOrderRequest("canonical-mvc"));
+
+        var response = await client.SendAsync(request);
+        var identity = await response.Content.ReadFromJsonAsync<EffectiveIdentity>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotEqual("ignored-key", identity.IdempotencyKey);
+        Assert.NotEqual("ignored-correlation", identity.CorrelationId);
+        Assert.Equal(identity.IdempotencyKey, response.Headers.GetValues("Idempotency-Key").Single());
+        Assert.Equal(identity.CorrelationId, response.Headers.GetValues("Correlation-Id").Single());
+    }
+
+    [Fact]
+    public async Task Minimal_api_can_recompute_identity_and_deduplicate_different_incoming_values()
+    {
+        using var server = CreateServer();
+        using var client = server.CreateClient();
+        var payload = new PayloadOrderRequest("canonical-minimal");
+
+        using var firstRequest = CreateIdentityRequest(
+            "/minimal-recomputed-identity",
+            payload,
+            "first-key",
+            "first-correlation");
+        var first = await client.SendAsync(firstRequest);
+        var firstIdentity = await first.Content.ReadFromJsonAsync<EffectiveIdentity>();
+
+        using var secondRequest = CreateIdentityRequest(
+            "/minimal-recomputed-identity",
+            payload,
+            "second-key",
+            "second-correlation");
+        var duplicate = await client.SendAsync(secondRequest);
+        var duplicateIdentity = await duplicate.Content.ReadFromJsonAsync<EffectiveIdentity>();
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, duplicate.StatusCode);
+        Assert.NotEqual("first-key", firstIdentity.IdempotencyKey);
+        Assert.NotEqual("first-correlation", firstIdentity.CorrelationId);
+        Assert.Equal(firstIdentity, duplicateIdentity);
+        Assert.Equal(firstIdentity.IdempotencyKey, duplicate.Headers.GetValues("Idempotency-Key").Single());
+        Assert.Equal(firstIdentity.CorrelationId, duplicate.Headers.GetValues("Correlation-Id").Single());
+    }
+
+    [Fact]
     public async Task Mvc_attribute_replays_completed_response_for_duplicate_computed_payload_key()
     {
         using var server = CreateServer();
@@ -438,6 +490,20 @@ public sealed class SquirrelBoxInboxFilterE2ETests
                             await context.Response.WriteAsync("large-body");
                         })
                         .WithSquirrelBoxInbox();
+
+                    endpoints
+                        .MapPost("/minimal-recomputed-identity", (
+                            PayloadOrderRequest request,
+                            ISquirrelBoxIdentityAccessor identityAccessor) =>
+                            Results.Ok(new EffectiveIdentity(
+                                identityAccessor.Current?.Operation.IdempotencyKey.Value,
+                                identityAccessor.Current?.Operation.CorrelationId.Value)))
+                        .WithSquirrelBoxInbox(options =>
+                        {
+                            options.IdempotencyKeyResolutionMode =
+                                InboxIdempotencyKeyResolutionMode.RecomputeFromPayload;
+                            options.CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming;
+                        });
                 });
             });
 
@@ -448,6 +514,19 @@ public sealed class SquirrelBoxInboxFilterE2ETests
     {
         using var document = JsonDocument.Parse(body);
         Assert.Equal(expected.ToString(), document.RootElement.GetProperty("State").GetString());
+    }
+
+    private static HttpRequestMessage CreateIdentityRequest(
+        string path,
+        PayloadOrderRequest payload,
+        string idempotencyKey,
+        string correlationId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, path);
+        request.Headers.Add("Idempotency-Key", idempotencyKey);
+        request.Headers.Add("Correlation-Id", correlationId);
+        request.Content = JsonContent.Create(payload);
+        return request;
     }
 
     private sealed class ManualTimeProvider : TimeProvider
@@ -466,6 +545,8 @@ public sealed class SquirrelBoxInboxFilterE2ETests
 }
 
 public sealed record PayloadOrderRequest(string Id);
+
+public sealed record EffectiveIdentity(string IdempotencyKey, string CorrelationId);
 
 /// <summary>
 /// Test controller used to validate MVC payload filters through real endpoint routing.
@@ -498,6 +579,15 @@ public sealed class PayloadOrdersController : ControllerBase
         Response.Headers.ETag = $"\"mvc-custom-{payload.Id}\"";
         return Created($"/payload-orders/{payload.Id}", new { payload.Id });
     }
+
+    [HttpPost("recomputed-identity")]
+    [SquirrelBoxInbox(
+        IdempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.RecomputeFromPayload,
+        CorrelationIdInputMode = InboxCorrelationIdInputMode.IgnoreIncoming)]
+    public IActionResult RecomputedIdentity(PayloadOrderRequest request)
+        => Ok(new EffectiveIdentity(
+            _inbox.Current.EffectiveIdempotencyKey,
+            _inbox.Current.Entry.CorrelationId));
 
     [HttpPost("window")]
     [SquirrelBoxInbox(TtlSeconds = 5)]

@@ -26,6 +26,11 @@ public sealed class InboxOpenRequest
     public string IdempotencyKeyName { get; init; }
 
     /// <summary>
+    /// Gets an optional idempotency key resolution mode override.
+    /// </summary>
+    public InboxIdempotencyKeyResolutionMode IdempotencyKeyResolutionMode { get; init; }
+
+    /// <summary>
     /// Gets the payload used for semantic hashing.
     /// </summary>
     public object Payload { get; init; }
@@ -44,6 +49,11 @@ public sealed class InboxOpenRequest
     /// Gets the metadata/header name used to receive the correlation id.
     /// </summary>
     public string CorrelationIdName { get; init; }
+
+    /// <summary>
+    /// Gets an optional incoming correlation id behavior override.
+    /// </summary>
+    public InboxCorrelationIdInputMode CorrelationIdInputMode { get; init; }
 
     /// <summary>
     /// Gets an optional correlation id resolution mode override.
@@ -133,15 +143,19 @@ public sealed class InboxOpenRequest
         TimeSpan? entryLifetime = null,
         InboxCompletedLockMode completedLock = InboxCompletedLockMode.Default,
         InboxDeferredPolicyOptions deferred = null,
-        CorrelationIdResolutionMode correlationIdResolutionMode = CorrelationIdResolutionMode.Default)
+        CorrelationIdResolutionMode correlationIdResolutionMode = CorrelationIdResolutionMode.Default,
+        InboxIdempotencyKeyResolutionMode idempotencyKeyResolutionMode = InboxIdempotencyKeyResolutionMode.Default,
+        InboxCorrelationIdInputMode correlationIdInputMode = InboxCorrelationIdInputMode.Default)
         => new()
         {
             Source = source,
             Operation = operation,
             IdempotencyKey = idempotencyKey,
+            IdempotencyKeyResolutionMode = idempotencyKeyResolutionMode,
             Payload = payload,
             PayloadType = typeof(TPayload).AssemblyQualifiedName,
             CorrelationId = correlationId,
+            CorrelationIdInputMode = correlationIdInputMode,
             CorrelationIdResolutionMode = correlationIdResolutionMode,
             Owner = owner,
             OwnsCompletion = ownsCompletion,

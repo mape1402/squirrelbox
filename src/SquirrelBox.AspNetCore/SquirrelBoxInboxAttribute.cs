@@ -9,7 +9,10 @@ namespace SquirrelBox.AspNetCore;
 /// Opens or continues a SquirrelBox inbox context from a bound MVC action payload.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
-public sealed class SquirrelBoxInboxAttribute : Attribute, IAsyncActionFilter, ISquirrelBoxInboxMetadata
+public sealed class SquirrelBoxInboxAttribute : Attribute,
+    IAsyncActionFilter,
+    ISquirrelBoxInboxMetadata,
+    ISquirrelBoxInboxIdentityMetadata
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="SquirrelBoxInboxAttribute"/> class.
@@ -56,6 +59,12 @@ public sealed class SquirrelBoxInboxAttribute : Attribute, IAsyncActionFilter, I
 
     /// <inheritdoc />
     public InboxCompletedLockMode CompletedLock { get; set; } = InboxCompletedLockMode.Default;
+
+    /// <inheritdoc />
+    public InboxIdempotencyKeyResolutionMode IdempotencyKeyResolutionMode { get; set; }
+
+    /// <inheritdoc />
+    public InboxCorrelationIdInputMode CorrelationIdInputMode { get; set; }
 
     /// <inheritdoc />
     public CorrelationIdResolutionMode CorrelationIdResolutionMode { get; set; }
